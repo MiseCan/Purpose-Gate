@@ -103,10 +103,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+// STATS remains an alias for HOME so saved state from older versions opens the dashboard.
 internal enum class Page { HOME, PAUSE, APPS, CHECKS, SETTINGS, PRESETS, ABOUT, RULES, STATS, APPEARANCE }
 
 
-/** The three navigation tabs are peers: only child pages have an in-app parent. */
+/** Dashboard and focus are peer tabs. STATS is only a legacy saved-state alias. */
 internal fun Page.parent(): Page? = when (this) {
     Page.HOME, Page.PAUSE, Page.STATS -> null
     Page.SETTINGS -> Page.HOME

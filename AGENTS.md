@@ -7,10 +7,14 @@ app/src/main/java/com/purposegate/
   PurposeAccessibilityService.kt   无障碍服务：前台判定、会话、倒计时、专注规则（逻辑核心，文件顶部有状态机说明）
   OverlayUi.kt                     悬浮层里的停顿弹窗 / 悬浮条界面（含各按钮门禁）
   GatePipActivity.kt               画中画悬浮条宿主（系统原生窗口）
-  MainActivity.kt                  应用入口与页面导航（页面动画、预见式返回）
+  MainActivity.kt                  应用入口
+  AppNavigation.kt                Navigation 3 + MD3E 页面动效、固定底栏与预测式返回
+  AppNavigationState.kt           同级主页面与子页返回栈
+  FadingContent.kt                淡出后移除旧控件树，当前页面直接接收操作
   AppData.kt                       页面枚举、应用清单、权限与偏好访问
   UiComponents.kt                  复用的 Material 3 组件
-  UiPages.kt                       总览 / 专注 / 记录 / 选择应用 / 权限检查 / 预设管理 / 关于
+  FocusPages.kt                    看板 / 专注 / 规则编辑
+  UiPages.kt                       选择应用 / 设置 / 权限检查 / 预设管理 / 关于
   PurposeGateStore.kt              SharedPreferences 读写（唯一的数据落盘入口）
   AboutContent.kt                  「关于」页文案（行为说明的唯一来源）
   Theme.kt / MaterialSymbols.kt / Illustrations.kt   M3 令牌、Material Symbols 图标、几何插图

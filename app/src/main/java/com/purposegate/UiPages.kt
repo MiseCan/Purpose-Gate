@@ -38,13 +38,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun PageHost(target: Page, navigate: (Page) -> Unit) {
+internal fun PageHost(target: Page, navigate: (Page) -> Unit, appsParent: Page = Page.PAUSE) {
     when (target) {
-        Page.HOME -> ExpressiveHomePage(navigate)
+        Page.HOME, Page.STATS -> DashboardPage(navigate)
         Page.PAUSE -> ExpressivePausePage(navigate)
-        Page.STATS -> StatsPage(navigate)
         Page.RULES -> RulesPage { navigate(Page.PAUSE) }
-        Page.APPS -> AppsPage { navigate(Page.PAUSE) }
+        Page.APPS -> AppsPage { navigate(appsParent) }
         Page.SETTINGS -> SettingsPage(navigate, onBack = { navigate(Page.HOME) })
         Page.CHECKS -> ChecksPage { navigate(Page.SETTINGS) }
         Page.APPEARANCE -> OverlaySettingsPage { navigate(Page.SETTINGS) }

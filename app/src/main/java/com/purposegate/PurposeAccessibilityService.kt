@@ -38,12 +38,12 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.ContentTransform
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -87,6 +87,15 @@ private sealed interface OverlayState {
     data class CombinedBar(val purpose: String, val remainingSeconds: Long) : OverlayState
     data class PurposeBar(val purpose: String) : OverlayState
     data class FocusBlocked(val reason: String, val title: String, val body: String) : OverlayState
+}
+
+/** Include the owner so visually identical prompts from different apps cannot share callbacks. */
+private data class OverlayUiTarget(val state: OverlayState?, val owner: String?) {
+    val contentKey: Any
+        get() = owner to when (state) {
+            is OverlayState.TimerRunning, is OverlayState.CombinedBar, is OverlayState.PurposeBar -> state.kind()
+            else -> state
+        }
 }
 
 private enum class OverlayKind {
@@ -292,7 +301,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         visitPermitted = false
         performGlobalAction(GLOBAL_ACTION_HOME)
     }
-    private var overlayOwnerPackage: String? = null
+    private var overlayOwnerPackage: String? by mutableStateOf(null)
     /** 桌面/多任务事件被判为尾随事件后，是否已经做过一次延迟复核。 */
     private var switcherRetryPending = false
     /** 输入法包名缓存：系统设置查询和包管理器查询都不能放在事件回调里反复做。 */
@@ -1308,86 +1317,83 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         }
     }
 
+    @OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
     @Composable
     private fun OverlayContent() {
-        val currentState = state
+        val motion = MaterialTheme.motionScheme
+        val effects = motion.defaultEffectsSpec<Float>()
+        val spatial = motion.defaultSpatialSpec<Float>()
+        val scene = OverlayUiTarget(state, overlayOwnerPackage)
+        val transition = androidx.compose.animation.core.updateTransition(scene, label = "overlay")
+
         val revision = rulesRevision
-        val promptRule = androidx.compose.runtime.remember(revision, overlayOwnerPackage, currentState?.kind()) {
-            PurposeGateStore.focusRule(this, overlayOwnerPackage.orEmpty())
-        }
-        AnimatedContent(
-            targetState = currentState,
-            // 弹窗用状态实例当 key：同类弹窗再次出现时会重新组合，门禁倒计时重新计时。
-            // 悬浮条只需要按种类区分，否则每秒的数字变化会触发过渡动画。
-            contentKey = { state ->
-                when (state) {
-                    null -> null
-                    is OverlayState.TimerRunning,
-                    is OverlayState.CombinedBar,
-                    is OverlayState.PurposeBar -> state.kind()
-                    else -> state
-                }
-            },
+        transition.AnimatedContent(
+            // Countdown values keep their content key; only a new owner or kind changes screens.
+            contentKey = { it.contentKey },
             transitionSpec = {
-                (fadeIn() + scaleIn(initialScale = 0.96f)).togetherWith(
-                    fadeOut() + scaleOut(targetScale = 0.96f)
+                (fadeIn(effects) + scaleIn(spatial, initialScale = 0.96f)).togetherWith(
+                    fadeOut(effects) + scaleOut(spatial, targetScale = 0.96f)
                 )
-            },
-            label = "overlay transition"
+            }
         ) { target ->
-            val currentState = target
-            val kind = target?.kind()
-            Box {
-                when (kind) {
-                    OverlayKind.TIMER_PROMPT -> (currentState as? OverlayState.TimerPrompt)?.let {
-                        TimerPromptContent(it.appName, ::startTimer, ::dismissPrompt, promptRule.pauseSeconds, promptRule.allowSkip, ::leaveFocusPrompt)
-                    }
-                    OverlayKind.TIMER_RUNNING -> (currentState as? OverlayState.TimerRunning)?.let {
-                        TimerBarContent(it.remainingSeconds, PurposeGateStore.overlayScale(this@PurposeAccessibilityService))
-                    }
-                    OverlayKind.TIMER_FINISHED -> (currentState as? OverlayState.TimerFinished)?.let {
-                        TimerFinishedContent(it.minutes, ::startTimer, ::leaveFocusPrompt)
-                    }
-                    OverlayKind.PURPOSE_PROMPT -> (currentState as? OverlayState.PurposePrompt)?.let {
-                        PurposePromptContent(
-                            appName = it.appName,
-                            onPurpose = ::startPurposeBar,
-                            onDismiss = ::dismissPrompt,
-                            pauseSeconds = promptRule.pauseSeconds, allowSkip = promptRule.allowSkip, onLeave = ::leaveFocusPrompt
-                        )
-                    }
-                    OverlayKind.COMBINED_PROMPT -> (currentState as? OverlayState.CombinedPrompt)?.let {
-                        CombinedPromptContent(
-                            appName = it.appName,
-                            onConfirm = { minutes, purpose ->
+            val currentState = target.state
+            val promptRule = androidx.compose.runtime.remember(revision, target.owner, currentState?.kind()) {
+                PurposeGateStore.focusRule(this@PurposeAccessibilityService, target.owner.orEmpty())
+            }
+            FadingContent(isCurrent = target.contentKey == scene.contentKey, fadeSpec = effects) {
+                // Outgoing lambdas must never act on a different application's new overlay.
+                val mayAct = {
+                    target.contentKey == OverlayUiTarget(state, overlayOwnerPackage).contentKey
+                }
+                val confirmTimer: (Int) -> Unit = { if (mayAct()) startTimer(it) }
+                val dismiss = { if (mayAct()) dismissPrompt() }
+                val leave = { if (mayAct()) leaveFocusPrompt() }
+                when (currentState) {
+                    is OverlayState.TimerPrompt -> TimerPromptContent(
+                        currentState.appName, confirmTimer, dismiss, promptRule.pauseSeconds, promptRule.allowSkip, leave
+                    )
+                    is OverlayState.TimerRunning -> TimerBarContent(
+                        currentState.remainingSeconds, PurposeGateStore.overlayScale(this@PurposeAccessibilityService)
+                    )
+                    is OverlayState.TimerFinished -> TimerFinishedContent(currentState.minutes, confirmTimer, leave)
+                    is OverlayState.PurposePrompt -> PurposePromptContent(
+                        appName = currentState.appName,
+                        onPurpose = { if (mayAct()) startPurposeBar(it) },
+                        onDismiss = dismiss,
+                        pauseSeconds = promptRule.pauseSeconds, allowSkip = promptRule.allowSkip, onLeave = leave
+                    )
+                    is OverlayState.CombinedPrompt -> CombinedPromptContent(
+                        appName = currentState.appName,
+                        onConfirm = { minutes, purpose ->
+                            if (mayAct()) {
                                 when {
                                     minutes != null && purpose != null -> startCombined(minutes, purpose)
                                     minutes != null -> startTimer(minutes)
                                     purpose != null -> startPurposeBar(purpose)
                                 }
-                            },
-                            onDismiss = ::dismissPrompt,
-                            pauseSeconds = promptRule.pauseSeconds, allowSkip = promptRule.allowSkip, onLeave = ::leaveFocusPrompt
-                        )
-                    }
-                    OverlayKind.COMBINED_BAR -> (currentState as? OverlayState.CombinedBar)?.let {
-                        CombinedBarContent(
-                            purpose = it.purpose,
-                            remainingSeconds = it.remainingSeconds,
-                            scale = PurposeGateStore.overlayScale(this@PurposeAccessibilityService)
-                        )
-                    }
-                    OverlayKind.PURPOSE_BAR -> (currentState as? OverlayState.PurposeBar)?.let {
-                        PurposeBarContent(it.purpose, PurposeGateStore.overlayScale(this@PurposeAccessibilityService))
-                    }
-                    OverlayKind.FOCUS_BLOCKED -> (currentState as? OverlayState.FocusBlocked)?.let {
-                        FocusBlockedContent(it.title, it.body, if (it.reason == "cooldown") blockedRemainingSeconds else null, ::leaveFocusPrompt)
-                    }
+                            }
+                        },
+                        onDismiss = dismiss,
+                        pauseSeconds = promptRule.pauseSeconds, allowSkip = promptRule.allowSkip, onLeave = leave
+                    )
+                    is OverlayState.CombinedBar -> CombinedBarContent(
+                        purpose = currentState.purpose,
+                        remainingSeconds = currentState.remainingSeconds,
+                        scale = PurposeGateStore.overlayScale(this@PurposeAccessibilityService)
+                    )
+                    is OverlayState.PurposeBar -> PurposeBarContent(
+                        currentState.purpose, PurposeGateStore.overlayScale(this@PurposeAccessibilityService)
+                    )
+                    is OverlayState.FocusBlocked -> FocusBlockedContent(
+                        currentState.title, currentState.body,
+                        if (currentState.reason == "cooldown") blockedRemainingSeconds else null, leave
+                    )
                     null -> Unit
                 }
             }
         }
     }
+
 
     @Composable
     private fun OverlayTheme(content: @Composable () -> Unit) {

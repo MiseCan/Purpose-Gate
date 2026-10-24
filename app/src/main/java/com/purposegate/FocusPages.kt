@@ -7,6 +7,7 @@ package com.purposegate
 import android.content.Intent
 import android.os.Build
 import androidx.activity.compose.BackHandler
+
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -34,106 +35,285 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-internal fun FocusNavigation(selected: Int, onHome: () -> Unit, onFocus: () -> Unit, onStats: () -> Unit) {
+internal fun FocusNavigation(selected: Int, onDashboard: () -> Unit, onFocus: () -> Unit) {
     NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-        listOf(Triple("总览", Symbols.PauseCircle, onHome), Triple("专注", Symbols.Tune, onFocus),
-            Triple("记录", Symbols.Insights, onStats)).forEachIndexed { i, (title, icon, action) ->
-            NavigationBarItem(selected = selected == i, onClick = action,
-                icon = { Symbol(icon, contentDescription = null) }, label = { Text(title) })
-        }
-    }
-}
-
-@Composable
-internal fun FocusHero(eyebrow: String, title: String, body: String, content: @Composable ColumnScope.() -> Unit = {}) {
-    Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.primaryContainer) {
-        Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary) {
-                Text(eyebrow, Modifier.padding(horizontal = 14.dp, vertical = 8.dp), style = MaterialTheme.typography.labelLarge)
+        listOf(Triple("看板", Symbols.Insights, onDashboard), Triple("专注", Symbols.Tune, onFocus))
+            .forEachIndexed { index, (title, icon, action) ->
+                NavigationBarItem(selected = selected == index, onClick = action,
+                    icon = { Symbol(icon) }, label = { Text(title) })
             }
-            Text(title, style = MaterialTheme.typography.headlineLarge)
-            Text(body, style = MaterialTheme.typography.bodyLarge)
-            content()
-        }
     }
 }
 
 @Composable
-internal fun MetricTile(value: String, label: String, modifier: Modifier = Modifier) {
-    Surface(modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.secondaryContainer) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(value, style = MaterialTheme.typography.headlineMedium)
-            Text(label, style = MaterialTheme.typography.labelLarge)
-        }
-    }
-}
-
-@Composable
-internal fun ExpressiveHomePage(navigate: (Page) -> Unit) {
+internal fun DashboardPage(navigate: (Page) -> Unit) {
     val context = LocalContext.current
-    var refresh by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) { while (true) { delay(2000); refresh++ } }
-    val selected = remember(refresh) { PurposeGateStore.selectedPackages(context) }
-    val used = remember(refresh) { selected.sumOf { PurposeGateStore.focusUsageMs(context, it) } / 60_000 }
-    val pauses = remember(refresh) { PurposeGateStore.focusCount(context, "pauses") }
+    val owner = LocalLifecycleOwner.current
+    var apps by remember { mutableStateOf<List<InstalledApp>?>(null) }
+    var revision by remember { mutableIntStateOf(0) }
+    var editing by remember { mutableStateOf<InstalledApp?>(null) }
+    LaunchedEffect(context, owner) {
+        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            launch { apps = withContext(Dispatchers.IO) { loadInstalledApps(context) } }
+            while (true) { revision++; delay(2000) }
+        }
+    }
+    val selected = remember(revision) { PurposeGateStore.selectedPackages(context) }
+    val usage = remember(revision, selected) {
+        selected.associateWith { PurposeGateStore.focusUsageMs(context, it) }
+    }
+    val budgets = remember(revision, selected) {
+        selected.associateWith { PurposeGateStore.focusRule(context, it).dailyLimitMinutes }
+    }
+    val rows = remember(apps, selected, usage) {
+        apps.orEmpty().filter { it.packageName in selected }.sortedByDescending { usage[it.packageName] ?: 0L }
+    }
+    val pauses = remember(revision) { PurposeGateStore.focusCount(context, "pauses") }
+    val walkaways = remember(revision) { PurposeGateStore.focusCount(context, "walkaways") }
+    val serviceEnabled = remember(revision) { isAccessibilityServiceEnabled(context) }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
-        topBar = { TopBar("PurposeGate", onSettings = { navigate(Page.SETTINGS) }) },
-        bottomBar = { FocusNavigation(0, { navigate(Page.HOME) }, { navigate(Page.PAUSE) }, { navigate(Page.STATS) }) }
+        topBar = { TopBar("看板", onSettings = { navigate(Page.SETTINGS) }) }
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = contentPadding,
-            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        LazyColumn(
+            Modifier.fillMaxSize().padding(padding),
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             item {
-                FocusHero("留一点空间给自己", "先停顿，\n再出发。", "把无意识的打开，变成有目的的选择。") {
-                    PauseIllustration(Modifier.fillMaxWidth().height(112.dp), accent = MaterialTheme.colorScheme.surface)
-                    ExpressiveButton(onClick = { navigate(Page.APPS) }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)) {
-                        Text(if (selected.isEmpty()) "选择想少用一点的应用" else "管理 ${selected.size} 个守护应用")
-                        Spacer(Modifier.width(8.dp)); Symbol(Symbols.ChevronRight)
+                Box(Modifier.padding(bottom = 12.dp)) {
+                    DashboardSummary(usage.values.sum(), serviceEnabled)
+                }
+            }
+            item {
+                Row(Modifier.padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    DashboardMetric(Symbols.PauseCircle, "$pauses", "今天的停顿", Modifier.weight(1f))
+                    DashboardMetric(Symbols.Logout, "$walkaways", "主动离开", Modifier.weight(1f))
+                }
+            }
+            item {
+                Box(Modifier.padding(bottom = 8.dp)) {
+                    SectionHeader("应用用量", "按今日时长排序 · 点按应用可调整规则")
+                }
+            }
+            when {
+                selected.isEmpty() -> item {
+                    InfoSurface(Symbols.Apps, "还没有守护应用，可在“专注 → 守护应用”中添加。")
+                }
+                apps == null -> item {
+                    Box(Modifier.fillMaxWidth().padding(28.dp), contentAlignment = Alignment.Center) { LoadingIndicator() }
+                }
+                rows.isEmpty() -> item {
+                    InfoSurface(Symbols.Apps, "当前没有可展示的应用，请在专注页检查守护应用。")
+                }
+                else -> itemsIndexed(rows, key = { _, app -> app.packageName }) { index, app ->
+                    DashboardAppUsage(app, usage[app.packageName] ?: 0L,
+                        budgets[app.packageName] ?: 0, index, rows.size) { editing = app }
+                }
+            }
+            item {
+                Text("本机今日记录 · 每天零点重置。仅统计无障碍服务运行期间的使用，不包含停顿等待。",
+                    Modifier.padding(horizontal = 8.dp).padding(top = 12.dp), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+    editing?.let { app ->
+        RuleEditor(app, onDismiss = { editing = null }, onSaved = { editing = null; revision++ })
+    }
+}
+
+@Composable
+private fun DashboardSummary(usedMs: Long, serviceEnabled: Boolean) {
+    StatusSummaryCard("今日守护应用使用", dashboardDuration(usedMs), serviceEnabled)
+}
+
+@Composable
+private fun StatusSummaryCard(label: String, value: String, serviceEnabled: Boolean, supportingText: String? = null) {
+    Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.primaryContainer) {
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                Surface(shape = CircleShape,
+                    color = if (serviceEnabled) MaterialTheme.colorScheme.surface.copy(alpha = .6f)
+                        else MaterialTheme.colorScheme.errorContainer,
+                    contentColor = if (serviceEnabled) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onErrorContainer) {
+                    Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Symbol(if (serviceEnabled) Symbols.Shield else Symbols.Error, size = 16.sp)
+                        Text(if (serviceEnabled) "守护中" else "服务未开启", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
-            item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MetricTile("$pauses 次", "今天的停顿", Modifier.weight(1f))
-                MetricTile("$used 分钟", "守护应用使用", Modifier.weight(1f))
-            } }
+            Text(value, style = MaterialTheme.typography.headlineLarge)
+            if (supportingText != null) {
+                Text(supportingText, style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .8f))
+            }
         }
     }
 }
+
+
+@Composable
+private fun DashboardMetric(icon: Int, value: String, label: String, modifier: Modifier = Modifier) {
+    Surface(modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(value, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                Symbol(icon, size = 22.sp, tint = MaterialTheme.colorScheme.primary)
+            }
+            Text(label, style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun DashboardAppUsage(app: InstalledApp, usedMs: Long, budget: Int,
+    index: Int, count: Int, onClick: () -> Unit) {
+    val reached = budget > 0 && usedMs >= budget * 60_000L
+    val accent = if (reached) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    Surface(onClick = onClick, shape = ExpressiveGroupShape(index, count),
+        color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Image(app.icon, null, Modifier.size(40.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(app.label, style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text(if (budget > 0) "每日额度 $budget 分钟" else "未设置每日额度",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(dashboardDuration(usedMs), style = MaterialTheme.typography.labelLarge, color = accent)
+            }
+            if (budget > 0) {
+                LinearProgressIndicator(
+                    progress = { (usedMs.toFloat() / (budget * 60_000L)).coerceIn(0f, 1f) },
+                    modifier = Modifier.fillMaxWidth(), color = accent)
+                if (reached) Text("已达今日额度", style = MaterialTheme.typography.labelSmall, color = accent)
+            }
+        }
+    }
+}
+
+private fun dashboardDuration(usedMs: Long): String {
+    val minutes = usedMs / 60_000L
+    return when {
+        usedMs in 1L until 60_000L -> "不足 1 分钟"
+        minutes < 60 -> "$minutes 分钟"
+        minutes % 60L == 0L -> "${minutes / 60} 小时"
+        else -> "${minutes / 60} 小时 ${minutes % 60} 分钟"
+    }
+}
+
 
 @Composable
 internal fun ExpressivePausePage(navigate: (Page) -> Unit) {
     val context = LocalContext.current
+    val owner = LocalLifecycleOwner.current
     var modes by remember { mutableStateOf(PurposeGateStore.modes(context)) }
+    var selectedCount by remember { mutableIntStateOf(PurposeGateStore.selectedPackages(context).size) }
+    var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                modes = PurposeGateStore.modes(context)
+                selectedCount = PurposeGateStore.selectedPackages(context).size
+                serviceEnabled = isAccessibilityServiceEnabled(context)
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
     Scaffold(containerColor = MaterialTheme.colorScheme.surface,
-        topBar = { TopBar("专注") },
-        bottomBar = { FocusNavigation(1, { navigate(Page.HOME) }, { navigate(Page.PAUSE) }, { navigate(Page.STATS) }) }
+        topBar = { TopBar("专注") }
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = contentPadding,
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            item { FocusHero("从一次打开开始", "决定怎么用，\n也决定何时停。", "每个应用都可以有不同的停顿与使用边界。可调整退出后保留时长，期限内返回会恢复计时和目的。") }
-            item { EntryCard(Symbols.Apps, "守护应用", "选择需要停顿的应用", { navigate(Page.APPS) }, PurposeGateStore.selectedPackages(context).size) }
-            item { EntryCard(Symbols.Shield, "专注规则", "全局默认与各应用的单独设置", { navigate(Page.RULES) }, containerColor = MaterialTheme.colorScheme.tertiaryContainer) }
-            item { SectionHeader("打开前，先问自己", "两项都选时合并为一个弹窗；都关闭时只执行额度与冷却") }
+            item { FocusModeSummary(modes, serviceEnabled) }
             item {
-                SwitchRow(Symbols.Timer, "给这次使用一个时长", "到点再决定是否继续", PurposeGateStore.MODE_TIMER in modes) {
-                    modes = modes.setMembership(PurposeGateStore.MODE_TIMER, it); PurposeGateStore.setModes(context, modes)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FocusQuickTile(Symbols.Apps, "守护应用", "选择需要提醒的应用",
+                        onClick = { navigate(Page.APPS) }, modifier = Modifier.weight(1f), badgeCount = selectedCount)
+                    FocusQuickTile(Symbols.Tune, "专注规则", "全局与单独设置",
+                        onClick = { navigate(Page.RULES) }, modifier = Modifier.weight(1f))
+                }
+            }
+            item { SectionHeader("打开前提醒", "两项可同时开启，自动保存") }
+            item {
+                SwitchRow(Symbols.Timer, "使用时长", "设置时长，到点提醒", PurposeGateStore.MODE_TIMER in modes) {
+                    modes = modes.setMembership(PurposeGateStore.MODE_TIMER, it)
+                    PurposeGateStore.setModes(context, modes)
                 }
             }
             item {
-                SwitchRow(Symbols.Flag, "给这次使用一个目的", "先想清楚，要完成什么", PurposeGateStore.MODE_PURPOSE in modes) {
-                    modes = modes.setMembership(PurposeGateStore.MODE_PURPOSE, it); PurposeGateStore.setModes(context, modes)
+                SwitchRow(Symbols.Flag, "使用目的", "确认目的，再继续使用", PurposeGateStore.MODE_PURPOSE in modes) {
+                    modes = modes.setMembership(PurposeGateStore.MODE_PURPOSE, it)
+                    PurposeGateStore.setModes(context, modes)
                 }
             }
         }
     }
 }
+
+@Composable
+private fun FocusModeSummary(modes: Set<String>, serviceEnabled: Boolean) {
+    val hasTimer = PurposeGateStore.MODE_TIMER in modes
+    val hasPurpose = PurposeGateStore.MODE_PURPOSE in modes
+    val title = when {
+        hasTimer && hasPurpose -> "时长 + 目的"
+        hasTimer -> "使用时长"
+        hasPurpose -> "使用目的"
+        else -> "仅执行规则"
+    }
+    val description = when {
+        hasTimer && hasPurpose -> "打开应用前，设定时长并确认目的。"
+        hasTimer -> "为这次使用设定时长，到点再决定是否继续。"
+        hasPurpose -> "打开应用前，先确认这次要做什么。"
+        else -> "时长和目的提醒已关闭，冷却与每日额度仍生效。"
+    }
+    StatusSummaryCard("当前提醒方式", title, serviceEnabled, description)
+}
+
+@Composable
+private fun FocusQuickTile(icon: Int, title: String, subtitle: String, onClick: () -> Unit,
+    modifier: Modifier = Modifier, badgeCount: Int? = null) {
+    Surface(onClick = onClick, modifier = modifier, shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Symbol(icon, size = 24.sp, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.weight(1f))
+                if (badgeCount != null) {
+                    Badge { Text("$badgeCount") }
+                } else {
+                    Symbol(Symbols.ChevronRight, size = 20.sp, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
 
 @Composable
 internal fun RulesPage(onBack: () -> Unit) {
@@ -254,17 +434,19 @@ private fun RuleEditor(app: InstalledApp?, onDismiss: () -> Unit, onSaved: () ->
         enabledValues = setOf(SheetValue.Hidden, SheetValue.PartiallyExpanded, SheetValue.Expanded)
     )
     val scope = rememberCoroutineScope()
+
     fun expandForInput() {
         if (sheetState.targetValue != SheetValue.Expanded) scope.launch { sheetState.expand() }
     }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+
         sheetState = sheetState,
         properties = ModalBottomSheetProperties(shouldDismissOnBackPress = false),
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow
     ) {
         TransparentRuleEditorNavigationBar()
-        // Back always dismisses; dragging still provides the half-expanded state.
+        // Restore the original direct dismissal; vertical dragging keeps the native M3 motion.
         BackHandler {
             scope.launch {
                 sheetState.hide()
@@ -412,45 +594,6 @@ private fun RuleNumber(
     )
 }
 
-
-@Composable
-internal fun StatsPage(navigate: (Page) -> Unit) {
-    val context = LocalContext.current
-    var apps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
-    var revision by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) { apps = withContext(Dispatchers.IO) { loadInstalledApps(context) }; while (true) { delay(2000); revision++ } }
-    val selected = remember(revision) { PurposeGateStore.selectedPackages(context) }
-    val rows = remember(revision, apps) { apps.filter { it.packageName in selected }.sortedByDescending { PurposeGateStore.focusUsageMs(context, it.packageName) } }
-    Scaffold(topBar = { TopBar("今天的记录") },
-        bottomBar = { FocusNavigation(2, { navigate(Page.HOME) }, { navigate(Page.PAUSE) }, { navigate(Page.STATS) }) }) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = contentPadding,
-            verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            item { FocusHero("今天 · 本机记录", "${selected.sumOf { PurposeGateStore.focusUsageMs(context, it) } / 60_000} 分钟", "守护应用的实际使用时长。不包含停顿弹窗等待，未开启服务期间不统计。") }
-            item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MetricTile("${PurposeGateStore.focusCount(context, "pauses")}", "停顿次数", Modifier.weight(1f))
-                MetricTile("${PurposeGateStore.focusCount(context, "walkaways")}", "主动离开", Modifier.weight(1f))
-            } }
-            item { SectionHeader("时间去了哪里", "每天本地时间零点重新计数") }
-            if (rows.isEmpty()) item { InfoSurface(Symbols.Apps, "还没有守护应用，先到专注页添加。") }
-            items(rows, key = { it.packageName }) { app ->
-                val used = PurposeGateStore.focusUsageMs(context, app.packageName)
-                val budget = PurposeGateStore.focusRule(context, app.packageName).dailyLimitMinutes
-                Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-                    Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Image(app.icon, null, Modifier.size(36.dp)); Text(app.label, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                            Text("${used / 60_000} 分钟", style = MaterialTheme.typography.labelLarge)
-                        }
-                        if (budget > 0) {
-                            LinearProgressIndicator(progress = { (used.toFloat() / (budget * 60_000L)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                            Text("每日额度 $budget 分钟", style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 /** A quiet, spring-like breath motif. No raster assets or fixed colors. */
 @Composable
