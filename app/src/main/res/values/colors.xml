@@ -1,0 +1,6 @@
+<resources>
+    <!-- Material 3 基线配色的 primary，作为自适应图标底色 -->
+    <color name="ic_launcher_background">#6750A4</color>
+    <!-- M3 基线 surface（浅色），避免 Compose 首帧之前闪白以外的颜色 -->
+    <color name="window_background">#FFFBFE</color>
+</resources>

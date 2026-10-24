@@ -1,0 +1,4 @@
+<resources>
+    <!-- M3 基线 surface（深色） -->
+    <color name="window_background">#1C1B1F</color>
+</resources>

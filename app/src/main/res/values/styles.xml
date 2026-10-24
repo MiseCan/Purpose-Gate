@@ -1,0 +1,22 @@
+<resources>
+    <!--
+      Compose 负责全部界面与配色，这里只提供窗口背景等必要设置。
+      状态栏/导航栏的明暗交给 Activity 的 enableEdgeToEdge() 跟随系统深浅色处理。
+    -->
+    <style name="Theme.PurposeGate" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#6750A4</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <!-- 画中画悬浮条：半透明窗口，避免进入画中画的一瞬间整屏闪一下。 -->
+    <style name="Theme.PurposeGate.Pip" parent="Theme.PurposeGate">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+</resources>

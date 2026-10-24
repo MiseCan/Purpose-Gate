@@ -1,0 +1,13 @@
+<!-- 通知栏小图标：系统只取 alpha 通道，所以用单色实心的“门 + 停顿”。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M6,11 A6,6 0 0 1 18,11 L18,19 A1,1 0 0 1 17,20 L7,20 A1,1 0 0 1 6,19 Z
+                          M9.5,12.25 A0.75,0.75 0 0 1 10.25,11.5 L10.25,11.5 A0.75,0.75 0 0 1 11,12.25 L11,16.75 A0.75,0.75 0 0 1 10.25,17.5 L10.25,17.5 A0.75,0.75 0 0 1 9.5,16.75 Z
+                          M13,12.25 A0.75,0.75 0 0 1 13.75,11.5 L13.75,11.5 A0.75,0.75 0 0 1 14.5,12.25 L14.5,16.75 A0.75,0.75 0 0 1 13.75,17.5 L13.75,17.5 A0.75,0.75 0 0 1 13,16.75 Z" />
+</vector>

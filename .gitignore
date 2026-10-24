@@ -1,0 +1,30 @@
+# Gradle / Kotlin build output
+/.gradle/
+/.kotlin/
+/build/
+/app/build/
+/app/build-upgraded/
+
+# Local IDE and Android SDK configuration
+/.idea/
+*.iml
+/local.properties
+
+# Local build helpers, logs and packaged artifacts
+/work/
+/outputs/
+*.log
+*.apk
+*.aab
+
+# Signing material and private environment configuration
+*.keystore
+*.keystore.lock
+*.jks
+/keystore.properties
+/.env
+/.env.*
+
+# OS metadata
+.DS_Store
+Thumbs.db
