@@ -5,15 +5,15 @@ import org.junit.Test
 
 class FocusRulesTest {
     @Test fun helperEventsResolveToTheRealForegroundApp() {
-        assertEquals("settings", verifiedForegroundPackage("helper", "settings", "self", setOf("ime")))
-        repeat(5) { assertEquals("a", verifiedForegroundPackage("helper", "a", "self", emptySet())) }
+        assertEquals("settings", verifiedForegroundPackage("helper", "settings", setOf("ime")))
+        repeat(5) { assertEquals("a", verifiedForegroundPackage("helper", "a", emptySet())) }
     }
 
-    @Test fun pipAndKeyboardWindowsDoNotReplaceTheUnderlyingApp() {
-        assertEquals("a", verifiedForegroundPackage("a", "self", "self", emptySet()))
-        assertEquals("a", verifiedForegroundPackage("a", "ime", "self", setOf("ime")))
-        assertEquals("a", verifiedForegroundPackage("a", null, "self", emptySet()))
-        assertEquals("home", verifiedForegroundPackage("a", "home", "self", emptySet()))
+    @Test fun mainWindowCountsAsLeavingButKeyboardDoesNot() {
+        assertEquals("self", verifiedForegroundPackage("a", "self", emptySet()))
+        assertEquals("a", verifiedForegroundPackage("a", "ime", setOf("ime")))
+        assertEquals("a", verifiedForegroundPackage("a", null, emptySet()))
+        assertEquals("home", verifiedForegroundPackage("a", "home", emptySet()))
     }
 
     @Test fun cooldownIsPerAppAndRepeatedChecksDoNotExtendIt() {

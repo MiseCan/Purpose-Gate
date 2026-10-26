@@ -14,7 +14,7 @@ import androidx.compose.ui.unit.dp
 
 internal val CountdownFontFamily = FontFamily.Monospace
 
-/** One expressive system for pages, accessibility overlays and PiP. Respects system font scaling. */
+/** One expressive system for pages and accessibility overlays. Respects system font scaling. */
 @Composable
 fun PurposeGateTheme(denseTypography: Boolean = false, content: @Composable () -> Unit) {
     val context = LocalContext.current

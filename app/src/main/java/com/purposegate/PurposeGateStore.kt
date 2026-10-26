@@ -14,16 +14,13 @@ object PurposeGateStore {
     private const val KEY_MODES = "modes"
     private const val KEY_OVERLAY_ALPHA = "overlay_alpha"
     private const val KEY_OVERLAY_SCALE = "overlay_scale"
-    private const val KEY_BAR_MODE = "bar_mode"
     private const val KEY_TIMER_PRESETS = "timer_presets"
     private const val KEY_PURPOSE_PRESETS = "purpose_presets"
 
     const val MODE_TIMER = "timer"
     const val MODE_PURPOSE = "purpose"
 
-    /** 悬浮条的两种承载方式：无障碍悬浮窗，或系统原生画中画。 */
-    const val BAR_MODE_OVERLAY = "overlay"
-    const val BAR_MODE_PIP = "pip"
+
 
     val DEFAULT_TIMER_PRESETS = listOf(5, 15, 30)
     val DEFAULT_PURPOSE_PRESETS = listOf("查资料", "娱乐")
@@ -58,13 +55,6 @@ object PurposeGateStore {
 
     fun setOverlayScale(context: Context, scale: Float) {
         prefs(context).edit().putFloat(KEY_OVERLAY_SCALE, scale.coerceIn(0.75f, 1.5f)).apply()
-    }
-
-    fun barMode(context: Context): String =
-        prefs(context).getString(KEY_BAR_MODE, BAR_MODE_PIP) ?: BAR_MODE_PIP
-
-    fun setBarMode(context: Context, mode: String) {
-        prefs(context).edit().putString(KEY_BAR_MODE, mode).apply()
     }
 
     /**

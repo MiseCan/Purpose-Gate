@@ -11,12 +11,4 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 
-    <!-- 画中画悬浮条：半透明窗口，避免进入画中画的一瞬间整屏闪一下。 -->
-    <style name="Theme.PurposeGate.Pip" parent="Theme.PurposeGate">
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:backgroundDimEnabled">false</item>
-        <item name="android:windowAnimationStyle">@null</item>
-        <item name="android:windowDisablePreview">true</item>
-    </style>
 </resources>

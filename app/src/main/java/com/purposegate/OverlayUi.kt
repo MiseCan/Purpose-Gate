@@ -9,7 +9,7 @@ package com.purposegate
  * 停顿弹窗与悬浮条的界面。
  *
  * 这些界面跑在无障碍服务创建的悬浮层里：服务决定显示哪个状态，这里只负责渲染。
- * 各按钮的等待（按应用设置的停顿、时间到 10 秒）也在各自的组件里。
+ * 初次停顿按应用规则等待；到时提醒的继续等待期限由服务按本次会话的超时次数提供。
  */
 
 import androidx.compose.foundation.layout.Arrangement
@@ -61,10 +61,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
-/** 停顿弹窗刚出现时先禁止跳过，避免条件反射式地点掉。 */
+/** 到时提醒使用单调时钟期限，重建界面或保留期内返回不会重新开始等待。 */
+@Composable
+private fun rememberDeadlineCountdown(deadlineElapsedRealtime: Long): Int {
+    fun remainingSeconds(): Int =
+        ((deadlineElapsedRealtime - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+            .let { (it + 999L) / 1_000L }).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    var remaining by androidx.compose.runtime.remember(deadlineElapsedRealtime) { mutableStateOf(remainingSeconds()) }
+    LaunchedEffect(deadlineElapsedRealtime) {
+        while (true) {
+            remaining = remainingSeconds()
+            if (remaining == 0) break
+            delay((deadlineElapsedRealtime - android.os.SystemClock.elapsedRealtime()).coerceIn(1L, 1_000L))
+        }
+    }
+    return remaining
+}
 
-/** 计时结束的提醒弹窗：继续按钮要等更久，先让用户真的停顿一下。 */
-private const val REMINDER_GATE_SECONDS = 10
+/** 停顿弹窗刚出现时先禁止跳过，避免条件反射式地点掉。 */
 
 @Composable
 internal fun rememberGateCountdown(seconds: Int): Int {
@@ -242,17 +256,21 @@ internal fun TimerBarContent(remainingSeconds: Long, scale: Float) {
 }
 
 @Composable
-internal fun TimerFinishedContent(minutes: Int, onContinue: (Int) -> Unit, onLeave: () -> Unit) {
-    // 时间到的提醒弹窗：继续按钮要等 10 秒，先让用户真的停顿一下。
-    val gateCountdown = rememberGateCountdown(REMINDER_GATE_SECONDS)
+internal fun TimerFinishedContent(
+    minutes: Int,
+    continueAtElapsedRealtime: Long,
+    onContinue: () -> Unit,
+    onLeave: () -> Unit
+) {
+    val gateCountdown = rememberDeadlineCountdown(continueAtElapsedRealtime)
     OverlaySurface {
         PromptCard {
             PromptTitle(Symbols.Hourglass, "时间到了")
             PauseBreath(gateCountdown)
             SupportingText("这段 $minutes 分钟的专注时间已经结束，先停一下，再决定是否继续。")
-            ExpressiveOutlinedButton(onClick = onLeave, enabled = gateCountdown == 0, modifier = Modifier.fillMaxWidth()) { Text(gateLabel("离开应用", gateCountdown)) }
-            ExpressiveButton(onClick = { onContinue(minutes) }, enabled = gateCountdown == 0, modifier = Modifier.fillMaxWidth()) {
-                Text(gateLabel("继续 $minutes 分钟", gateCountdown))
+            ExpressiveOutlinedButton(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("退出应用") }
+            ExpressiveButton(onClick = onContinue, enabled = gateCountdown == 0, modifier = Modifier.fillMaxWidth()) {
+                Text(gateLabel("再次使用 3 分钟", gateCountdown))
             }
         }
     }

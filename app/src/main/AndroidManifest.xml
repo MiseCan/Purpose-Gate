@@ -23,16 +23,6 @@
             </intent-filter>
         </activity>
 
-        <!-- 悬浮条的宿主：用系统原生画中画承载，窗口由系统拖动/关闭/展开。 -->
-        <activity
-            android:name=".GatePipActivity"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|uiMode|density|keyboardHidden"
-            android:exported="false"
-            android:launchMode="singleTask"
-            android:supportsPictureInPicture="true"
-            android:taskAffinity="com.purposegate.pip"
-            android:theme="@style/Theme.PurposeGate.Pip" />
-
         <service
             android:name=".PurposeAccessibilityService"
             android:foregroundServiceType="specialUse"

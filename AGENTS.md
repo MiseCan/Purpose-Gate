@@ -6,7 +6,7 @@
 app/src/main/java/com/purposegate/
   PurposeAccessibilityService.kt   无障碍服务：前台判定、会话、倒计时、专注规则（逻辑核心，文件顶部有状态机说明）
   OverlayUi.kt                     悬浮层里的停顿弹窗 / 悬浮条界面（含各按钮门禁）
-  GatePipActivity.kt               画中画悬浮条宿主（系统原生窗口）
+  ForegroundTracking.kt            前台应用窗口选择与离开复核
   MainActivity.kt                  应用入口
   AppNavigation.kt                Navigation 3 + MD3E 页面动效、固定底栏与预测式返回
   AppNavigationState.kt           同级主页面与子页返回栈
@@ -34,7 +34,7 @@ app/src/main/java/com/purposegate/
 - 触发条件、判定顺序、去抖时长、过滤规则（例如前台应用判定、窗口类型过滤）；
 - 交互规则与门禁时长（跳过 / 确认 / 提醒按钮各等多少秒）；
 - 会话与宽限规则（多少秒内回到应用恢复状态、超时后如何处理）；
-- 悬浮条承载方式（画中画 / 悬浮窗）、入口位置、开关与设置项；
+- 悬浮窗显示与收起、入口位置、开关与设置项；
 - 权限用途、隐私说明、版本号来源。
 
 同时检查这些位置是否需要一起调整：

@@ -69,7 +69,7 @@ internal fun SettingsPage(navigate: (Page) -> Unit, onBack: () -> Unit) {
                     onClick = { navigate(Page.PRESETS) })
             }
             item {
-                EntryCard(Symbols.Visibility, "悬浮条外观", "画中画或悬浮窗 · 大小 · 透明度",
+                EntryCard(Symbols.Visibility, "悬浮条外观", "大小 · 透明度 · 拖动位置",
                     onClick = { navigate(Page.APPEARANCE) })
             }
             item { SectionHeader("支持与说明", "管理授权，了解应用") }
@@ -350,24 +350,12 @@ internal fun OverlaySettingsPage(onBack: () -> Unit) {
     val context = LocalContext.current
     var alpha by remember { mutableFloatStateOf(PurposeGateStore.overlayAlpha(context)) }
     var scale by remember { mutableFloatStateOf(PurposeGateStore.overlayScale(context)) }
-    var barMode by remember { mutableStateOf(PurposeGateStore.barMode(context)) }
-    val isOverlay = barMode == PurposeGateStore.BAR_MODE_OVERLAY
+
     Scaffold(containerColor = MaterialTheme.colorScheme.surface,
         topBar = { TopBar("悬浮窗设置", onBack = onBack) }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = contentPadding,
             verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            item {
-                ChildSection(Symbols.Visibility, "显示方式", "选择悬浮条的承载方式") {
-                    ChildChoiceRow(listOf("画中画", "悬浮窗"), if (isOverlay) 1 else 0, onSelected = {
-                        barMode = if (it == 0) PurposeGateStore.BAR_MODE_PIP else PurposeGateStore.BAR_MODE_OVERLAY
-                        PurposeGateStore.setBarMode(context, barMode)
-                    })
-                    Text(if (isOverlay) "由应用绘制，可调整透明度和大小，拖动换位置。"
-                        else "由系统承载，可自由拖动、缩放和关闭，系统会记住位置。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
+
             item {
                 Surface(color = MaterialTheme.colorScheme.surfaceContainer,
                     shape = MaterialTheme.shapes.extraLarge) {
@@ -376,9 +364,9 @@ internal fun OverlaySettingsPage(onBack: () -> Unit) {
                         verticalArrangement = Arrangement.spacedBy(20.dp)) {
                         Text("显示预览", style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        val previewScale = if (isOverlay) scale else 1f
+                        val previewScale = scale
                         Surface(Modifier.widthIn(max = 320.dp).fillMaxWidth()
-                            .graphicsLayer(alpha = if (isOverlay) alpha else 1f),
+                            .graphicsLayer(alpha = alpha),
                             color = MaterialTheme.colorScheme.primaryContainer,
                             shape = MaterialTheme.shapes.extraLarge) {
                             Column(Modifier.padding(20.dp),
@@ -397,13 +385,13 @@ internal fun OverlaySettingsPage(onBack: () -> Unit) {
             }
             item {
                 SliderCard(Symbols.Opacity, "透明度", "${(alpha * 100).toInt()}%",
-                    "仅悬浮窗模式生效，画中画的透明度由系统决定。", alpha, .4f..1f, 5) {
+                    "调整悬浮条的透明度。", alpha, .4f..1f, 5) {
                     alpha = it; PurposeGateStore.setOverlayAlpha(context, it)
                 }
             }
             item {
                 SliderCard(Symbols.FormatSize, "大小", "${(scale * 100).toInt()}%",
-                    "仅悬浮窗模式生效，画中画可用两根手指缩放。", scale, .75f..1.5f, 2) {
+                    "调整悬浮条的文字和布局大小。", scale, .75f..1.5f, 2) {
                     scale = it; PurposeGateStore.setOverlayScale(context, it)
                 }
             }

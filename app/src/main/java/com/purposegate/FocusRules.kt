@@ -11,11 +11,9 @@ data class AppFocusRule(
 
 internal enum class FocusDecision { DAILY_LIMIT, COOLDOWN, PROMPT }
 
-/** Third-party accessibility helpers can emit events under their own package name. */
-internal fun verifiedForegroundPackage(eventPackage: String, topPackage: String?, ownPackage: String,
-    ignoredTopPackages: Set<String>): String =
-    if (topPackage != null && topPackage != ownPackage && topPackage !in ignoredTopPackages) topPackage else eventPackage
-
+/** Application windows have already been filtered; our main Activity is a real foreground app. */
+internal fun verifiedForegroundPackage(eventPackage: String, topPackage: String?, ignoredTopPackages: Set<String>): String =
+    if (topPackage != null && topPackage !in ignoredTopPackages) topPackage else eventPackage
 internal fun focusDecision(
     rule: AppFocusRule,
     usedMs: Long,

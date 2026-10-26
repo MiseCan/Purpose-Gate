@@ -81,7 +81,12 @@ import kotlinx.coroutines.delay
 private sealed interface OverlayState {
     data class TimerPrompt(val appName: String) : OverlayState
     data class TimerRunning(val remainingSeconds: Long) : OverlayState
-    data class TimerFinished(val minutes: Int) : OverlayState
+    data class TimerFinished(
+        val minutes: Int,
+        val timeoutCount: Int,
+        val continueAtElapsedRealtime: Long,
+        val purpose: String? = null
+    ) : OverlayState
     data class PurposePrompt(val appName: String) : OverlayState
     data class CombinedPrompt(val appName: String) : OverlayState
     data class CombinedBar(val purpose: String, val remainingSeconds: Long) : OverlayState
@@ -120,11 +125,15 @@ private data class PausedSession(
 )
 
 private sealed interface SessionSnapshot {
+    /** 跳过后的访问没有悬浮窗，但与已确认的访问共用退出后保留期限。 */
+    data object Skipped : SessionSnapshot
+
     /** 离开时悬浮窗正在显示的状态，回到目标应用时原样恢复。 */
     data class Visible(
         val state: OverlayState,
         val remainingSeconds: Long,
-        val timerMinutes: Int
+        val timerMinutes: Int,
+        val timerTimeoutCount: Int
     ) : SessionSnapshot
 
 }
@@ -143,28 +152,29 @@ private fun OverlayState.kind(): OverlayKind = when (this) {
 /**
  * PurposeGate 的无障碍服务：整个应用的“大脑”。
  *
- * ## 五个归属变量（谁属于谁，别混）
+ * ## 访问与窗口归属（谁属于谁，别混）
  * - [currentPackage]：当前前台应用，判定用。
  * - [handledPackage]：本次进入前台已经处理过的应用，用来避免同一应用重复弹窗。
  * - [overlayOwnerPackage]：正在显示的全屏弹窗（退回模式下也包括悬浮条）属于哪个应用。
- * - [pipBarPackage]：画中画悬浮条属于哪个应用。
  * - [timerOwnerPackage]：倒计时属于哪个应用，决定到点在哪里弹提醒。
+ * - [skippedPackage]：已跳过且正在使用的应用，没有悬浮窗；离开时同样保存会话。
  *
  * ## 一次前台切换的判断顺序
- * 1. 事件过滤：只收 TYPE_WINDOW_STATE_CHANGED；忽略本应用自己的悬浮窗/界面事件、通知栏与状态栏、输入法；
+ * 1. 事件过滤：监听窗口状态与窗口列表变化；过滤自身悬浮窗事件，主界面算正常目的地、通知栏与状态栏、输入法；
  *    桌面与多任务算一次正常的前台变化。
  * 2. 去抖：普通应用 650 毫秒，桌面/多任务 200 毫秒；被判定为退场动画尾随事件时用窗口列表核对后丢弃。
  * 3. [handleForegroundPackage]：先结束上一次目标访问（按生效规则保存会话），再判断当前应用是否已选、
  *    是否选了显示界面、本次是否已处理过，最后弹窗或恢复会话。
- * 4. 离开目标应用：把悬浮条状态存成会话（保留时长可配置，默认 30 秒），到期由 [sweepSessions] 清理。
+ * 4. 离开目标应用：把悬浮条或跳过状态存成会话（保留时长可配置，默认 30 秒），到期由 [sweepSessions] 清理。
  * 5. 息屏等同离开；解锁时重新确认真实最上层应用窗口，保留期限内回到同一应用则恢复状态。
  *
  * ## 计时与提醒
- * 倒计时由 [timerTick] 每秒推进，只负责数字与到点判断，画面交给悬浮条自己刷新。
- * 到点时：目标应用在前台 → 收起悬浮条并弹“时间到了”；不在前台 → 悬浮条停在 00:00，等回到应用再弹。
+ * 倒计时由 [timerTick] 每秒推进，只负责数字与到点判断，直接更新同一悬浮窗内容。
+ * 到点时：目标应用确实在前台且无待确认切换时才显示“时间到了”；离开时收起悬浮窗，保留期内返回再恢复或提醒。
+ * 退出可立即点击；再次使用固定三分钟，第一次超时等待十秒，同一会话每再次超时增加十秒。
  *
  * ## 相关文件
- * OverlayUi.kt：悬浮层里的弹窗与悬浮条界面；GatePipActivity.kt：画中画悬浮条宿主；
+ * OverlayUi.kt：悬浮层里的弹窗与悬浮条界面；ForegroundTracking.kt：前台窗口选择；
  * AppData.kt / UiComponents.kt / UiPages.kt / MainActivity.kt：主界面；PurposeGateStore.kt：配置读写。
  */
 class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOwner {
@@ -176,6 +186,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         // 桌面/多任务事件是“已经切出应用”的强信号，用很短的去抖尽快收起弹窗。
         private const val SWITCHER_DEBOUNCE_MS = 200L
         private const val SWITCHER_RETRY_MS = 300L
+        private const val NO_TIMER = -1L
         private const val OVERLAY_DEFAULT_X = 24
         private const val OVERLAY_DEFAULT_Y = 64
 
@@ -223,6 +234,10 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     private var handledPackage: String? = null
     /** 按包名保存的限时会话，离开目标应用后回到同一个应用时用来恢复。 */
     private val sessions = mutableMapOf<String, PausedSession>()
+    /** 跳过状态只属于当前访问；真正离开时才开始计算保留期限。 */
+    private var skippedPackage: String? = null
+    private val activeSessionOwnerPackage: String?
+        get() = overlayOwnerPackage ?: skippedPackage
     private val visitPolicy = VisitPolicy()
     private var visitPermitted = false
     private var lastUsageMark = SystemClock.elapsedRealtime()
@@ -246,6 +261,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
 
     private val focusPolicyTick = object : Runnable {
         override fun run() {
+            reconcileForegroundWindow()
             accountFocusUsage()
             enforceCurrentFocusRule()
             serviceHandler.postDelayed(this, 1000L)
@@ -256,7 +272,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         if (pendingPackage != null || !isScreenOnNow() || isDeviceLocked()) return
         val pkg = currentPackage ?: return
         if (pkg !in PurposeGateStore.selectedPackages(this)) {
-            if (overlayOwnerPackage == pkg || pipBarPackage == pkg) { hidePipBar(); clearOverlay() }
+            if (activeSessionOwnerPackage == pkg) clearOverlay()
             visitPermitted = false
             return
         }
@@ -279,7 +295,6 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         accountFocusUsage()
         sessions.remove(pkg)
         visitPermitted = false
-        hidePipBar()
         clearOverlay()
         overlayOwnerPackage = pkg
         setOverlayState(OverlayState.FocusBlocked(reason,
@@ -296,7 +311,6 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     private fun leaveFocusPrompt() {
         PurposeGateStore.recordFocusEvent(this, "walkaways")
         overlayOwnerPackage?.let { sessions.remove(it) }
-        hidePipBar()
         clearOverlay()
         visitPermitted = false
         performGlobalAction(GLOBAL_ACTION_HOME)
@@ -310,14 +324,11 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     private var state: OverlayState? by mutableStateOf(null)
     private var timerSeconds = 0L
     private var timerMinutes = 0
+    /** 同一会话内累计的超时次数，保留期内切出与返回不重置。 */
+    private var timerTimeoutCount = 0
     /** 当前倒计时属于哪个应用；别的应用接管悬浮窗后由会话快照保存剩余时间。 */
     private var timerOwnerPackage: String? = null
-    /** 悬浮条是否由画中画承载（不可用时退回无障碍悬浮条）。 */
-    private var pipBarPackage: String? = null
-    private var pipUnavailable = false
-    /** 画中画悬浮条当前显示的内容，单独保存，避免被别的应用弹窗覆盖后丢失。 */
-    private var barPurpose: String? = null
-    private var barHasTimer = false
+
     private var dragStartRawX = 0f
     private var dragStartRawY = 0f
     private var dragStartX = 0
@@ -352,15 +363,13 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     private val sessionSweep = Runnable { sweepSessions() }
 
     private var screenReceiverRegistered = false
-    private var barReceiverRegistered = false
-    /** 画中画悬浮条回传的状态：用户主动关闭，或系统不允许画中画。 */
-    private val barStateReceiver = object : BroadcastReceiver() {
+    private var settingsReceiverRegistered = false
+    /** 应用内部的通知和规则更新广播。 */
+    private val settingsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                GatePipActivity.ACTION_BAR_CLOSED -> onBarClosedByUser()
-                GatePipActivity.ACTION_PIP_UNAVAILABLE -> onPipUnavailable()
                 ACTION_REFRESH_NOTIFICATION -> startOngoingNotification()
-                ACTION_RULES_CHANGED -> { rulesRevision++; enforceCurrentFocusRule() }
+                ACTION_RULES_CHANGED -> { rulesRevision++; reconcileForegroundWindow(); enforceCurrentFocusRule() }
             }
         }
     }
@@ -411,7 +420,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         enableWindowListAccess()
         refreshInputMethodCache()
         registerScreenStateReceiver()
-        registerBarStateReceiver()
+        registerSettingsReceiver()
         defaultHomePackage = runCatching {
             packageManager.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)
                 ?.activityInfo?.packageName
@@ -483,106 +492,35 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         }.onFailure { Log.w(TAG, "Foreground notification unavailable", it) }
     }
 
-    private fun registerBarStateReceiver() {
-        if (barReceiverRegistered) return
+    private fun registerSettingsReceiver() {
+        if (settingsReceiverRegistered) return
         val filter = IntentFilter().apply {
-            addAction(GatePipActivity.ACTION_BAR_CLOSED)
-            addAction(GatePipActivity.ACTION_PIP_UNAVAILABLE)
             addAction(ACTION_REFRESH_NOTIFICATION)
             addAction(ACTION_RULES_CHANGED)
         }
         runCatching {
-            androidx.core.content.ContextCompat.registerReceiver(this, barStateReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
-        }.onSuccess { barReceiverRegistered = true }
+            androidx.core.content.ContextCompat.registerReceiver(this, settingsReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        }.onSuccess { settingsReceiverRegistered = true }
     }
 
-    private fun unregisterBarStateReceiver() {
-        if (!barReceiverRegistered) return
-        runCatching { unregisterReceiver(barStateReceiver) }
-        barReceiverRegistered = false
+    private fun unregisterSettingsReceiver() {
+        if (!settingsReceiverRegistered) return
+        runCatching { unregisterReceiver(settingsReceiver) }
+        settingsReceiverRegistered = false
     }
 
-    /**
-     * 显示悬浮条。两种承载方式由用户在设置里选择：
-     * - 画中画：交给系统，原生负责拖动、关闭、展开；
-     * - 悬浮窗：继续用无障碍悬浮条，可自行拖动、可调透明度和大小。
-     * 画中画进入失败时自动退回悬浮窗，保证功能不丢。
-     */
+    /** One synchronous accessibility overlay owns the purpose/timer bar. */
     private fun showBar(packageName: String, purpose: String?, hasTimer: Boolean, remainingSeconds: Long) {
-        barPurpose = purpose
-        barHasTimer = hasTimer
-        val pipMode = PurposeGateStore.barMode(this) == PurposeGateStore.BAR_MODE_PIP
-        if (pipMode && !pipUnavailable) {
-            pipBarPackage = packageName
-            val launched = runCatching {
-                startActivity(
-                    GatePipActivity.intent(
-                        this,
-                        purpose,
-                        if (hasTimer) remainingSeconds else GatePipActivity.NO_TIMER
-                    )
-                )
-            }.isSuccess
-            if (launched) return
-            // 设备不支持画中画：退回悬浮窗
-            pipUnavailable = true
-            pipBarPackage = null
-        }
         overlayOwnerPackage = packageName
-        showOverlayBar(purpose, if (hasTimer) remainingSeconds else GatePipActivity.NO_TIMER)
-    }
-
-    private fun hidePipBar() {
-        serviceHandler.removeCallbacks(timerTick)
-        timerOwnerPackage = null
-        barPurpose = null
-        barHasTimer = false
-        if (pipBarPackage == null) return
-        pipBarPackage = null
-        sendBroadcast(Intent(GatePipActivity.ACTION_FINISH_BAR).setPackage(packageName))
-    }
-
-    /** 画中画不可用时的退路：仍然用无障碍悬浮条显示。 */
-    private fun showOverlayBar(purpose: String?, remainingSeconds: Long) {
+        val seconds = if (hasTimer) remainingSeconds else NO_TIMER
         val nextState = when {
-            purpose != null && remainingSeconds >= 0L -> OverlayState.CombinedBar(purpose, remainingSeconds)
+            purpose != null && seconds >= 0L -> OverlayState.CombinedBar(purpose, seconds)
             purpose != null -> OverlayState.PurposeBar(purpose)
-            remainingSeconds >= 0L -> OverlayState.TimerRunning(remainingSeconds)
+            seconds >= 0L -> OverlayState.TimerRunning(seconds)
             else -> return
         }
         setOverlayState(nextState, fullScreen = false)
     }
-
-    /** 用户用画中画窗口的关闭按钮结束了悬浮条：结束这次会话。 */
-    private fun onBarClosedByUser() {
-        val owner = pipBarPackage ?: return
-        pipBarPackage = null
-        serviceHandler.removeCallbacks(timerTick)
-        timerOwnerPackage = null
-        barPurpose = null
-        barHasTimer = false
-        sessions.remove(owner)
-        scheduleSessionSweep()
-        if (overlayOwnerPackage == owner) clearOverlay()
-    }
-
-    private fun onPipUnavailable() {
-        pipUnavailable = true
-        pipBarPackage = null
-        when (val current = state) {
-            is OverlayState.TimerRunning -> {
-                showOverlayBar(null, timerSeconds)
-                timerOwnerPackage?.let { restartTimerTick(it) }
-            }
-            is OverlayState.CombinedBar -> {
-                showOverlayBar(current.purpose, timerSeconds)
-                timerOwnerPackage?.let { restartTimerTick(it) }
-            }
-            is OverlayState.PurposeBar -> showOverlayBar(current.purpose, GatePipActivity.NO_TIMER)
-            else -> Unit
-        }
-    }
-
     private fun isScreenOnNow(): Boolean =
         (getSystemService(POWER_SERVICE) as? PowerManager)?.isInteractive == true
 
@@ -592,20 +530,25 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
      */
     private fun enableWindowListAccess() {
         val info = serviceInfo ?: return
-        if (info.flags and AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS != 0) return
-        runCatching {
-            serviceInfo = info.apply {
-                flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-            }
-        }
+        val flags = info.flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+        val events = info.eventTypes or AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        if (info.flags == flags && info.eventTypes == events) return
+        runCatching { serviceInfo = info.apply { this.flags = flags; eventTypes = events } }
     }
-
     override fun onUnbind(intent: Intent?): Boolean {
         accountFocusUsage()
         serviceHandler.removeCallbacks(focusPolicyTick)
         serviceHandler.removeCallbacks(notificationRefresh)
         stopForeground(STOP_FOREGROUND_REMOVE)
         unregisterScreenStateReceiver()
+        unregisterSettingsReceiver()
+        cancelForegroundTracking()
+        serviceHandler.removeCallbacks(sessionSweep)
+        sessions.clear()
+        clearOverlay()
+        visitPermitted = false
+        currentPackage = null
+        handledPackage = null
         return super.onUnbind(intent)
     }
 
@@ -647,19 +590,15 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
             if (visitPermitted) visitPolicy.leave(pkg, lastUsageMark, PurposeGateStore.focusRule(this, pkg))
         }
         visitPermitted = false
-        pendingPackage = null
-        switcherRetryPending = false
-        serviceHandler.removeCallbacks(foregroundChange)
-        val owner = overlayOwnerPackage ?: return
+        cancelForegroundTracking()
+        val owner = activeSessionOwnerPackage ?: return
         endTargetVisit(owner)
     }
 
     /** 解锁后重新确认真实前台应用，避免息屏期间留下过期状态。 */
     private fun onScreenUnlocked() {
         val fallback = currentPackage
-        pendingPackage = null
-        switcherRetryPending = false
-        serviceHandler.removeCallbacks(foregroundChange)
+        cancelForegroundTracking()
         currentPackage = null
         handledPackage = null
         refreshInputMethodCache()
@@ -668,164 +607,164 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         handleForegroundPackage(resolved)
     }
 
-    /**
-     * 读取真正位于最上层的应用窗口包名。
-     * 依赖 accessibility_service_config.xml 里的 canRetrieveWindowContent，
-     * 拿不到时返回 null，由调用方回退到无障碍事件里的包名。
-     */
-    private fun topApplicationWindowPackage(): String? {
+    /** Read the real non-floating application window, preferring input focus over stale activity. */
+    private fun topApplicationWindowPackage(requireActive: Boolean = false): String? {
         val info = serviceInfo ?: return null
         val hasFlag = info.flags and AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS != 0
-        val hasCapability = info.capabilities and
-            AccessibilityServiceInfo.CAPABILITY_CAN_RETRIEVE_WINDOW_CONTENT != 0
-        if (!hasFlag && !hasCapability) {
-            return null
-        }
+        val hasCapability = info.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_RETRIEVE_WINDOW_CONTENT != 0
+        if (!hasFlag || !hasCapability) return null
         return runCatching {
-            val all = windows.orEmpty()
-            val applicationWindows = all
-                .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
-            val target = applicationWindows.firstOrNull { it.isActive }
-                ?: applicationWindows.firstOrNull { it.isFocused }
-                ?: applicationWindows.firstOrNull()
-            target?.root?.packageName?.toString()
+            val snapshots = windows.orEmpty().filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }.map {
+                ForegroundWindow(
+                    packageName = runCatching { it.root?.packageName?.toString() }.getOrNull(),
+                    layer = it.layer, focused = it.isFocused, active = it.isActive,
+                    inPictureInPicture = it.isInPictureInPictureMode
+                )
+            }
+            foregroundWindowPackage(snapshots, SYSTEM_WINDOW_PACKAGES + imePackages.orEmpty(), requireActive)
         }.getOrNull()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        if (!isScreenOnNow() || isDeviceLocked()) return
-        val packageName = event?.packageName?.toString() ?: return
-        val eventStartedAt = SystemClock.elapsedRealtimeNanos()
-        // 悬浮窗和画中画窗口都属于本应用，它们自己的窗口事件不能算前台变化；
-        // 但用户主动打开 PurposeGate 主界面时，目标应用确实已经离开前台，
-        // 需要按正常的前台切换处理，否则悬浮条会一直飘在本应用上面。
-        if (packageName == packageNameForService() &&
-            event.className?.toString()?.contains("MainActivity") != true
-        ) return
-        // 通知栏、状态栏、悬浮通知、输入法都不算前台应用变化，不能因此收起悬浮窗；
-        // 桌面和多任务界面算前台变化，用来判断“已经离开目标应用”。
-        if (isTransientSystemWindowEvent(event, packageName)) return
-        // Opening a text field also creates a window-state event for the IME.
-        // The keyboard is not a foreground-app change and must not dismiss the
-        // purpose/timer prompt while the user is typing.
-        if (isInputMethodEvent(event, packageName)) return
-        if (packageName == currentPackage) {
-            pendingPackage = null
-            serviceHandler.removeCallbacks(foregroundChange)
+    private var windowRecheckScheduled = false
+    private val windowRecheck = Runnable {
+        windowRecheckScheduled = false
+        reconcileForegroundWindow(force = true)
+    }
+
+    private fun requestWindowRecheck() {
+        if (windowRecheckScheduled) return
+        windowRecheckScheduled = true
+        serviceHandler.postDelayed(windowRecheck, SWITCHER_DEBOUNCE_MS)
+    }
+
+    /** Window events repair missed app events; the existing one-second tick also checks active visits. */
+    private fun reconcileForegroundWindow(force: Boolean = false) {
+        if (!force && activeSessionOwnerPackage == null && !visitPermitted) return
+        if (!isScreenOnNow() || isDeviceLocked()) {
+            if (activeSessionOwnerPackage != null) onScreenOff()
             return
         }
+        val top = topApplicationWindowPackage(requireActive = true) ?: return
+        if (top != currentPackage) scheduleForegroundChange(top)
+        else if (activeSessionOwnerPackage != null && activeSessionOwnerPackage != top) {
+            activeSessionOwnerPackage?.let { endTargetVisit(it) }
+        }
+    }
 
-        // Some apps emit a short burst of window-state events while settling on
-        // one activity. Only commit the last package after it remains stable.
-        pendingPackage = packageName
+    private fun cancelForegroundTracking() {
+        pendingPackage = null
+        switcherRetryPending = false
+        windowRecheckScheduled = false
+        serviceHandler.removeCallbacks(foregroundChange)
+        serviceHandler.removeCallbacks(windowRecheck)
+    }
+
+    private fun scheduleForegroundChange(candidate: String) {
+        // Repeated events for one destination must not postpone the same deadline indefinitely.
+        if (candidate == pendingPackage) return
+        pendingPackage = candidate
         switcherRetryPending = false
         serviceHandler.removeCallbacks(foregroundChange)
-        serviceHandler.postDelayed(foregroundChange, debounceFor(packageName))
-        val costMs = (SystemClock.elapsedRealtimeNanos() - eventStartedAt) / 1_000_000
-        if (costMs >= 20) Log.d(TAG, "event slow ${costMs}ms pkg=$packageName")
+        serviceHandler.postDelayed(foregroundChange, debounceFor(candidate))
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event ?: return
+        if (!isScreenOnNow() || isDeviceLocked()) return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            if (Build.VERSION.SDK_INT >= 28) {
+                val relevant = AccessibilityEvent.WINDOWS_CHANGE_ADDED or AccessibilityEvent.WINDOWS_CHANGE_REMOVED or
+                    AccessibilityEvent.WINDOWS_CHANGE_ACTIVE or AccessibilityEvent.WINDOWS_CHANGE_FOCUSED or
+                    AccessibilityEvent.WINDOWS_CHANGE_LAYER or AccessibilityEvent.WINDOWS_CHANGE_PIP
+                if (event.windowChanges and relevant == 0) return
+            }
+            requestWindowRecheck()
+            return
+        }
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val eventPackage = event.packageName?.toString() ?: return
+        // Our overlay is not an application window. The actual PurposeGate main window is a destination.
+        if (eventPackage == packageNameForService() &&
+            event.className?.toString()?.contains("MainActivity") != true &&
+            topApplicationWindowPackage(requireActive = true) != packageNameForService()) return
+        if (isTransientSystemWindowEvent(event, eventPackage) || isInputMethodEvent(event, eventPackage)) return
+        if (eventPackage == currentPackage) {
+            if (pendingPackage != null) {
+                val top = topApplicationWindowPackage(requireActive = true)
+                if (top == null || top == currentPackage) {
+                    pendingPackage = null
+                    serviceHandler.removeCallbacks(foregroundChange)
+                } else requestWindowRecheck()
+            }
+            return
+        }
+        scheduleForegroundChange(eventPackage)
     }
 
     private fun debounceFor(packageName: String): Long =
         if (isSwitcherPackage(packageName)) SWITCHER_DEBOUNCE_MS else FOREGROUND_DEBOUNCE_MS
 
-    private fun isTransientSystemWindowEvent(
-        event: AccessibilityEvent,
-        packageName: String
-    ): Boolean {
+    private fun isTransientSystemWindowEvent(event: AccessibilityEvent, packageName: String): Boolean {
         if (isSwitcherWindowEvent(event, packageName)) return false
-        if (
-            packageName == "android" ||
-            packageName == "com.android.systemui"
-        ) return true
+        if (packageName == "android" || packageName == "com.android.systemui") return true
         val className = event.className?.toString().orEmpty()
-        return className.contains("StatusBar", ignoreCase = true) ||
-            className.contains("Notification", ignoreCase = true) ||
-            className.contains("HeadsUp", ignoreCase = true) ||
-            className == "android.widget.Toast"
+        return className.contains("StatusBar", true) || className.contains("Notification", true) ||
+            className.contains("HeadsUp", true) || className == "android.widget.Toast"
     }
 
-    /**
-     * 桌面和多任务界面。这里只按明确的桌面包名和“多任务界面”类名判断，
-     * 不再用 contains("Launcher")/endsWith("HomeActivity") 这类宽泛匹配，
-     * 否则微信的 LauncherUI 之类入口 Activity 会被误判成桌面，导致打开应用时被忽略。
-     */
-    private fun isSwitcherWindowEvent(
-        event: AccessibilityEvent,
-        packageName: String
-    ): Boolean {
+    private fun isSwitcherWindowEvent(event: AccessibilityEvent, packageName: String): Boolean {
         if (packageName in LAUNCHER_PACKAGES || packageName == defaultHomePackage) return true
         val className = event.className?.toString().orEmpty()
-        return className.endsWith("RecentsActivity") ||
-            className.endsWith("RecentTasksActivity") ||
+        return className.endsWith("RecentsActivity") || className.endsWith("RecentTasksActivity") ||
             className.endsWith("OverviewActivity")
     }
 
     private fun isInputMethodEvent(event: AccessibilityEvent, packageName: String): Boolean {
-        if (event.className?.toString()?.contains("InputMethod", ignoreCase = true) == true) {
-            return true
-        }
-        // 这两项查询都是跨进程调用，不能在事件回调里每秒做几十次，缓存起来即可。
+        if (event.className?.toString()?.contains("InputMethod", true) == true) return true
         if (defaultImePackage == null && imePackages == null) refreshInputMethodCache()
-        if (defaultImePackage == packageName) return true
-        return imePackages?.contains(packageName) == true
+        return defaultImePackage == packageName || imePackages?.contains(packageName) == true
     }
 
     private fun refreshInputMethodCache() {
         defaultImePackage = runCatching {
-            Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
-                ?.substringBefore('/')
+            Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
         }.getOrNull()
         imePackages = runCatching {
-            packageManager.queryIntentServices(Intent(InputMethod.SERVICE_INTERFACE), 0)
-                .mapNotNull { it.serviceInfo?.packageName }
-                .toSet()
+            packageManager.queryIntentServices(Intent(InputMethod.SERVICE_INTERFACE), 0).mapNotNull { it.serviceInfo?.packageName }.toSet()
         }.getOrNull()
     }
 
     private val foregroundChange: Runnable = object : Runnable {
         override fun run() {
-            val packageName = pendingPackage ?: return
+            val candidate = pendingPackage ?: return
             pendingPackage = null
             val top = topApplicationWindowPackage()
-            if (isStaleSwitcherCommit(packageName, top)) {
+            if (isSwitcherPackage(candidate) && top == currentPackage) {
                 if (!switcherRetryPending) {
-                    // 窗口列表可能还没更新完，稍后再确认一次，避免漏掉真正的切换。
                     switcherRetryPending = true
-                    pendingPackage = packageName
-                    serviceHandler.removeCallbacks(this)
+                    pendingPackage = candidate
                     serviceHandler.postDelayed(this, SWITCHER_RETRY_MS)
                     return
                 }
                 switcherRetryPending = false
-                Log.d(TAG, "skip stale switcher commit $packageName top=$top current=$currentPackage")
+                // Dropping this one tail event does not disable future window/tick reconciliation.
+                requestWindowRecheck()
                 return
             }
             switcherRetryPending = false
-            val verified = verifiedForegroundPackage(packageName, top, packageNameForService(),
-                SYSTEM_WINDOW_PACKAGES + imePackages.orEmpty())
-            if (verified != packageName) Log.d(TAG, "verify foreground event=$packageName top=$verified")
-            handleForegroundPackage(verified)
+            handleForegroundPackage(verifiedForegroundPackage(candidate, top, SYSTEM_WINDOW_PACKAGES + imePackages.orEmpty()))
         }
     }
 
-    /**
-     * 桌面、多任务、系统遮罩窗口在退场动画里会晚一点再发一次事件。
-     * 如果这一刻窗口列表还显示用户就在原来的目标应用里，说明这只是尾随事件，
-     * 不能当成“已经离开应用”，否则刚弹出的界面会先消失再重弹。
-     */
-    private fun isStaleSwitcherCommit(pending: String, topApplicationWindow: String?): Boolean {
-        val previous = currentPackage ?: return false
-        if (!isSwitcherPackage(pending)) return false
-        // 窗口列表确认用户还在原来的目标应用里：说明这只是退场动画的尾随事件。
-        return topApplicationWindow == previous
-    }
 
     private fun isSwitcherPackage(packageName: String): Boolean =
         packageName in LAUNCHER_PACKAGES || packageName in SYSTEM_WINDOW_PACKAGES || packageName == defaultHomePackage
 
     private fun handleForegroundPackage(packageName: String) {
-        if (packageName == currentPackage) return
+        if (packageName == currentPackage) {
+            activeSessionOwnerPackage?.takeIf { it != packageName }?.let { endTargetVisit(it) }
+            return
+        }
 
         accountFocusUsage()
         val previousPackage = currentPackage
@@ -835,12 +774,11 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         visitPermitted = false
         lastUsageMark = SystemClock.elapsedRealtime()
         Log.d(TAG, "foreground $previousPackage -> $packageName")
-        if (previousPackage != null && previousPackage != packageName &&
-            (previousPackage == overlayOwnerPackage || previousPackage == pipBarPackage)
-        ) {
-            // 完成一次目标应用访问：悬浮条立即隐藏并进入设定的会话保留期，
-            // 全屏弹窗和“时间到了”提醒立刻收起，但同样保留会话。
-            endTargetVisit(previousPackage)
+        val previousOwner = activeSessionOwnerPackage
+        if (previousOwner != null && previousOwner != packageName) {
+            // 完成一次目标应用访问：已确认或跳过的状态进入同一个会话保留期，
+            // 同时收起该应用的悬浮条、停顿弹窗或到时提醒。
+            endTargetVisit(previousOwner)
         }
         currentPackage = packageName
         startOngoingNotification()
@@ -897,7 +835,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         setOverlayState(nextState, fullScreen = true)
     }
 
-    /** 跳过只处理这次访问；再次离开并进入时按正常规则判断。 */
+    /** 跳过后不显示悬浮条，离开时仍按生效规则保留本次访问。 */
     private fun dismissPrompt() {
         val owner = overlayOwnerPackage ?: return
         sessions.remove(owner)
@@ -905,22 +843,18 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         handledPackage = owner
         scheduleSessionSweep()
         clearOverlay()
+        skippedPackage = owner
     }
 
     /**
-     * 目标应用离开前台：把当前悬浮窗状态按生效规则保存为限时会话。
+     * 目标应用离开前台：把悬浮窗或跳过状态按生效规则保存为限时会话。
      * 悬浮条、全屏弹窗与提醒立即收起，宽限期内仅保存会话并按实际时长计时。
      */
     private fun endTargetVisit(packageName: String) {
+        if (activeSessionOwnerPackage != packageName) return
         val currentState = state
-        val leavesPipBar = packageName == pipBarPackage
         val snapshot = when {
-            // 画中画悬浮条的内容单独记录，不会被别的应用弹窗顶掉。
-            leavesPipBar -> SessionSnapshot.Visible(
-                state = barState(),
-                remainingSeconds = timerSeconds,
-                timerMinutes = timerMinutes
-            )
+            skippedPackage == packageName -> SessionSnapshot.Skipped
             currentState is OverlayState.TimerRunning ||
                 currentState is OverlayState.CombinedBar ||
                 currentState is OverlayState.PurposeBar ||
@@ -928,12 +862,13 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
                 SessionSnapshot.Visible(
                     state = currentState,
                     remainingSeconds = timerSeconds,
-                    timerMinutes = timerMinutes
+                    timerMinutes = timerMinutes,
+                    timerTimeoutCount = timerTimeoutCount
                 )
             else -> null
         }
         val retentionMs = PurposeGateStore.focusRule(this, packageName).sessionRetentionSeconds * 1000L
-        if (snapshot is SessionSnapshot.Visible && retentionMs > 0) {
+        if (snapshot != null && retentionMs > 0) {
             val params = overlayLayoutParams
             val now = SystemClock.elapsedRealtime()
             sessions[packageName] = PausedSession(
@@ -949,18 +884,8 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         }
         scheduleSessionSweep()
 
-        // 会话快照已保存：离开后立即收起两种悬浮条，恢复时按离开时长扣减。
-        hidePipBar()
+        // 会话快照已保存：离开后立即收起悬浮条，恢复时按离开时长扣减。
         clearOverlay()
-    }
-
-    private fun barState(): OverlayState {
-        val purpose = barPurpose
-        return when {
-            barHasTimer && purpose != null -> OverlayState.CombinedBar(purpose, timerSeconds)
-            barHasTimer -> OverlayState.TimerRunning(timerSeconds)
-            else -> OverlayState.PurposeBar(purpose.orEmpty())
-        }
     }
 
     /** 保留期限内回到目标应用：恢复上次状态，返回 false 表示需要重新弹窗。 */
@@ -975,22 +900,22 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         sessions.remove(packageName)
 
         when (val snapshot = session.snapshot) {
+            SessionSnapshot.Skipped -> {
+                clearOverlay()
+                skippedPackage = packageName
+            }
             is SessionSnapshot.Visible -> {
                 val savedState = snapshot.state
                 state = savedState
                 val remaining = snapshot.remainingSeconds - elapsed / 1000L
                 timerMinutes = snapshot.timerMinutes
+                timerTimeoutCount = snapshot.timerTimeoutCount
                 when (savedState) {
                     is OverlayState.TimerRunning,
                     is OverlayState.CombinedBar -> {
                         val purpose = (savedState as? OverlayState.CombinedBar)?.purpose
                         if (remaining <= 0L) {
-                            timerSeconds = 0L
-                            hidePipBar()
-                            setOverlayState(
-                                OverlayState.TimerFinished(snapshot.timerMinutes),
-                                fullScreen = true
-                            )
+                            showTimerFinished(packageName)
                         } else {
                             timerSeconds = remaining
                             timerOwnerPackage = packageName
@@ -1004,12 +929,11 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
                             packageName,
                             savedState.purpose,
                             hasTimer = false,
-                            remainingSeconds = GatePipActivity.NO_TIMER
+                            remainingSeconds = NO_TIMER
                         )
                     }
                     is OverlayState.TimerFinished -> {
                         timerOwnerPackage = packageName
-                        hidePipBar()
                         setOverlayState(savedState, fullScreen = true)
                     }
                     is OverlayState.TimerPrompt,
@@ -1027,8 +951,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
 
     private fun dropSession(packageName: String) {
         sessions.remove(packageName)
-        if (pipBarPackage == packageName) hidePipBar()
-        if (overlayOwnerPackage == packageName) clearOverlay()
+        if (activeSessionOwnerPackage == packageName) clearOverlay()
     }
 
     private fun sweepSessions() {
@@ -1071,10 +994,10 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         serviceHandler.removeCallbacks(notificationRefresh)
         stopForeground(STOP_FOREGROUND_REMOVE)
         unregisterScreenStateReceiver()
-        unregisterBarStateReceiver()
+        unregisterSettingsReceiver()
+        cancelForegroundTracking()
         serviceHandler.removeCallbacks(sessionSweep)
         sessions.clear()
-        hidePipBar()
         clearOverlay()
         lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         super.onDestroy()
@@ -1228,6 +1151,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         dragUpdatePosted = false
         timerSeconds = 0
         timerMinutes = 0
+        timerTimeoutCount = 0
         overlayView?.let { view ->
             runCatching { windowManager.removeView(view) }
         }
@@ -1236,13 +1160,8 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         overlayIsFullScreen = true
         state = null
         overlayOwnerPackage = null
-        // 画中画不可用时悬浮条就画在这个悬浮窗里，收起它即结束这条会话的计时。
-        // 画中画悬浮条是独立窗口，由 hidePipBar() 单独负责。
-        if (pipBarPackage == null) {
-            timerOwnerPackage = null
-            barPurpose = null
-            barHasTimer = false
-        }
+        timerOwnerPackage = null
+        skippedPackage = null
     }
 
     private fun startTimer(minutes: Int) {
@@ -1282,40 +1201,64 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
             owner,
             purpose,
             hasTimer = false,
-            remainingSeconds = GatePipActivity.NO_TIMER
+            remainingSeconds = NO_TIMER
         )
+    }
+
+    /** 每个计时段只记录一次超时；恢复同一到时提醒不重复累计。 */
+    private fun showTimerFinished(packageName: String) {
+        if (state is OverlayState.TimerFinished) return
+        val purpose = (state as? OverlayState.CombinedBar)?.purpose
+        timerSeconds = 0L
+        timerTimeoutCount += 1
+        overlayOwnerPackage = packageName
+        timerOwnerPackage = packageName
+        setOverlayState(
+            OverlayState.TimerFinished(
+                minutes = timerMinutes,
+                timeoutCount = timerTimeoutCount,
+                continueAtElapsedRealtime = SystemClock.elapsedRealtime() + timerTimeoutCount * 10_000L,
+                purpose = purpose
+            ),
+            fullScreen = true
+        )
+    }
+
+    /** 追加固定三分钟，沿用本次目的与超时次数，而非开始新的会话。 */
+    private fun continueTimerAfterTimeout() {
+        val finished = state as? OverlayState.TimerFinished ?: return
+        if (SystemClock.elapsedRealtime() < finished.continueAtElapsedRealtime) return
+        if (finished.purpose != null) startCombined(3, finished.purpose) else startTimer(3)
+        timerTimeoutCount = finished.timeoutCount
     }
 
     private val timerTick = object : Runnable {
         override fun run() {
             val owner = timerOwnerPackage ?: return
-            timerSeconds--
-            if (timerSeconds <= 0) {
-                if (currentPackage == owner) {
-                    // 目标应用正在前台：收起悬浮条并弹出“时间到了”。
-                    timerSeconds = 0L
-                    hidePipBar()
-                    setOverlayState(OverlayState.TimerFinished(timerMinutes), fullScreen = true)
-                } else {
-                    // 目标应用不在前台：悬浮条停在 00:00，等回到应用后再弹提醒。
-                    timerSeconds = 0L
-                    sendBroadcast(
-                        Intent(GatePipActivity.ACTION_TIMER_ZERO).setPackage(packageName)
-                    )
+            timerSeconds = (timerSeconds - 1L).coerceAtLeast(0L)
+            if (timerSeconds == 0L) {
+                // Resolve a departure before presenting an expired timer over an unselected app.
+                reconcileForegroundWindow()
+                if (timerOwnerPackage != owner) return
+                if (currentPackage == owner && pendingPackage == null) {
+                    showTimerFinished(owner)
+                    return
                 }
-            } else {
-                // 只更新内部状态（会话快照要用）；画中画悬浮条自己每秒刷新数字，
-                // 别的应用的全屏弹窗也不会被这里的赋值顶掉。
-                val currentState = state
-                state = when (currentState) {
-                    is OverlayState.CombinedBar -> OverlayState.CombinedBar(currentState.purpose, timerSeconds)
-                    is OverlayState.TimerRunning -> OverlayState.TimerRunning(timerSeconds)
-                    else -> currentState
+                if (pendingPackage == null) {
+                    if (overlayOwnerPackage == owner) endTargetVisit(owner)
+                    return
                 }
-                serviceHandler.postDelayed(this, 1000L)
             }
+            state = when (val current = state) {
+                is OverlayState.CombinedBar -> current.copy(remainingSeconds = timerSeconds)
+                is OverlayState.TimerRunning -> current.copy(remainingSeconds = timerSeconds)
+                else -> current
+            }
+            // A pending departure may be cancelled; recheck an expired timer after it settles.
+            serviceHandler.postDelayed(this, 1000L)
         }
     }
+
 
     @OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
     @Composable
@@ -1355,7 +1298,12 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
                     is OverlayState.TimerRunning -> TimerBarContent(
                         currentState.remainingSeconds, PurposeGateStore.overlayScale(this@PurposeAccessibilityService)
                     )
-                    is OverlayState.TimerFinished -> TimerFinishedContent(currentState.minutes, confirmTimer, leave)
+                    is OverlayState.TimerFinished -> TimerFinishedContent(
+                        minutes = currentState.minutes,
+                        continueAtElapsedRealtime = currentState.continueAtElapsedRealtime,
+                        onContinue = { if (mayAct()) continueTimerAfterTimeout() },
+                        onLeave = leave
+                    )
                     is OverlayState.PurposePrompt -> PurposePromptContent(
                         appName = currentState.appName,
                         onPurpose = { if (mayAct()) startPurposeBar(it) },

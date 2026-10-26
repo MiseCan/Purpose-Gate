@@ -8,8 +8,9 @@
 - 使用计时、选择目的，或将两种模式合并；支持自定义快捷预设。
 - 配置全局规则；没有独立设置的应用自动继承，也可为每个应用单独设置。
 - 规则包括打开前等待、退出后保留时间、离开后的冷却、每日使用额度，以及是否允许跳过。
-- 离开应用后立即收起悬浮条，保留期限内返回恢复原来的计时与目的；超过期限结束会话。保留时间默认 30 秒，可设为 0–3600 秒，0 表示退出即结束。
-- 悬浮条支持系统画中画或无障碍悬浮窗，可调整悬浮窗大小与透明度。
+- 离开应用后立即收起悬浮条，保留期限内返回恢复原来的计时、目的或跳过状态；超过期限结束会话。保留时间默认 30 秒，可设为 0–3600 秒，0 表示退出即结束。
+- 悬浮条使用无障碍悬浮窗，可拖动并调整大小与透明度；离开目标应用后收起。
+- 到时提醒可立即退出应用，或等待后再次使用 3 分钟；同一会话的继续等待按超时次数从 10 秒开始，每次增加 10 秒。
 - 看板集中展示今日使用时长、停顿次数、主动离开次数、各应用用量与每日额度进度；点按应用用量可调整规则，守护应用统一在专注页管理。
 - 看板右上角进入设置，集中管理预设、悬浮条外观、权限和应用说明。
 - 动态取色、深浅色主题、Material 3 Expressive 控件与系统字体缩放。
@@ -55,7 +56,7 @@ adb install -r app/build-upgraded/outputs/apk/debug/app-debug.apk
 - [FocusRules.kt](app/src/main/java/com/purposegate/FocusRules.kt)：规则模型和优先级。
 - [PurposeGateStore.kt](app/src/main/java/com/purposegate/PurposeGateStore.kt)：全局规则、应用独立规则与本地记录。
 - [FocusPages.kt](app/src/main/java/com/purposegate/FocusPages.kt)、[UiPages.kt](app/src/main/java/com/purposegate/UiPages.kt)：主页面、设置和规则编辑。
-- [OverlayUi.kt](app/src/main/java/com/purposegate/OverlayUi.kt)、[GatePipActivity.kt](app/src/main/java/com/purposegate/GatePipActivity.kt)：停顿弹窗与悬浮条。
+- [OverlayUi.kt](app/src/main/java/com/purposegate/OverlayUi.kt)：停顿弹窗与悬浮条；[ForegroundTracking.kt](app/src/main/java/com/purposegate/ForegroundTracking.kt)：前台窗口判定。
 - [UiComponents.kt](app/src/main/java/com/purposegate/UiComponents.kt)、[Theme.kt](app/src/main/java/com/purposegate/Theme.kt)：共享控件与主题。
 
 设计和交互参考见 [UPGRADE_NOTES.md](UPGRADE_NOTES.md)。目前验证了调试构建和覆盖安装；最新调整未重新进行完整单元测试或真机回归。

@@ -490,7 +490,7 @@ private fun RuleEditor(app: InstalledApp?, onDismiss: () -> Unit, onSaved: () ->
                     enabled = editable, onFocus = ::expandForInput)
             }
             item {
-                RuleNumber(Symbols.Schedule, "退出后保留时间", "0=退出即结束；期限内返回恢复计时和目的", "秒", 0..3600,
+                RuleNumber(Symbols.Schedule, "退出后保留时间", "适用于确认和跳过；0=退出即结束", "秒", 0..3600,
                     if (editable) retention else globalRule.sessionRetentionSeconds.toString(), { retention = it },
                     enabled = editable, onFocus = ::expandForInput)
             }
@@ -509,7 +509,7 @@ private fun RuleEditor(app: InstalledApp?, onDismiss: () -> Unit, onSaved: () ->
                     if (editable) skip else globalRule.allowSkip, enabled = editable) { skip = it }
             }
             item {
-                Text("离开应用时悬浮条立即收起，计时和目的保留设定时间；超时结束会话，期限内返回可恢复。",
+                Text("离开后保留计时、目的或跳过状态，期限内返回可恢复；超时后重新弹窗。",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             item {
