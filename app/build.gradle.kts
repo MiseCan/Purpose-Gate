@@ -12,8 +12,8 @@ android {
         minSdk = 26
         targetSdk = 37
         // 版本变化会让桌面重新读取图标，换图标后不需要用户手动删掉再添加桌面快捷方式。
-        versionCode = 3
-        versionName = "2.0"
+        versionCode = 5
+        versionName = "2.0.1"
     }
 
     buildTypes {

@@ -4,12 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ForegroundTrackingTest {
-    @Test fun focusedWechatWinsOverThePreviousActiveTarget() {
+    @Test fun focusedApplicationWinsOverThePreviousActiveTarget() {
         val windows = listOf(
             ForegroundWindow("target", layer = 10, active = true),
-            ForegroundWindow("com.tencent.mm", layer = 5, focused = true)
+            ForegroundWindow("com.example.unselected", layer = 5, focused = true)
         )
-        assertEquals("com.tencent.mm", foregroundWindowPackage(windows, emptySet(), requireActive = true))
+        assertEquals("com.example.unselected", foregroundWindowPackage(windows, emptySet(), requireActive = true))
     }
 
     @Test fun aFloatingApplicationCannotHideTheHomeWindow() {
@@ -31,5 +31,15 @@ class ForegroundTrackingTest {
         val windows = listOf(ForegroundWindow("ime", 10, focused = true),
             ForegroundWindow("com.purposegate", 5, active = true))
         assertEquals("com.purposegate", foregroundWindowPackage(windows, setOf("ime"), true))
+    }
+    @Test fun unreadableFocusedDestinationUsesOnlyItsOwnWindowEvent() {
+        val windows = listOf(
+            ForegroundWindow("target", 10, active = true, windowId = 1),
+            ForegroundWindow(null, 20, focused = true, windowId = 2)
+        )
+        assertEquals("com.example.destination", foregroundWindowPackage(
+            windows, emptySet(), true, mapOf(2 to "com.example.destination")))
+        assertNull(foregroundWindowPackage(windows, emptySet(), true, mapOf(1 to "target")))
+        assertNull(foregroundWindowPackage(windows, setOf("ime"), true, mapOf(2 to "ime")))
     }
 }

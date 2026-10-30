@@ -74,7 +74,7 @@ internal fun SettingsPage(navigate: (Page) -> Unit, onBack: () -> Unit) {
             }
             item { SectionHeader("支持与说明", "管理授权，了解应用") }
             item {
-                EntryCard(Symbols.VerifiedUser, "守护状态与权限", "检查授权、后台运行与常驻通知",
+                EntryCard(Symbols.VerifiedUser, "管控状态与权限", "检查授权、后台运行与常驻通知",
                     onClick = { navigate(Page.CHECKS) })
             }
             item {
@@ -268,13 +268,13 @@ internal fun ChecksPage(onBack: () -> Unit) {
     }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.surface,
-        topBar = { TopBar("守护状态与权限", onBack = onBack) },
+        topBar = { TopBar("管控状态与权限", onBack = onBack) },
         snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).imePadding(),
             contentPadding = contentPadding, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item { SectionHeader("运行状态", "从系统设置返回后自动更新") }
             item { StatusCard("无障碍服务",
-                if (serviceEnabled) "正在监听前台应用变化" else "选定应用的停顿提醒需要开启此服务",
+                if (serviceEnabled) "正在执行所选应用的管控规则" else "应用使用管控需要开启此服务",
                 serviceEnabled, "已开启", "未开启") }
             item {
                 ExpressiveButton(onClick = {

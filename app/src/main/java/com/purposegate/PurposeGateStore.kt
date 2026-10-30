@@ -4,7 +4,7 @@ import android.content.Context
 
 object PurposeGateStore {
     fun ongoingTitle(c: Context) = prefs(c).getString("ongoing_title", "PurposeGate 正在运行")!!
-    fun ongoingText(c: Context) = prefs(c).getString("ongoing_text", "停顿监听已连接 · 点此检查权限与后台设置")!!
+    fun ongoingText(c: Context) = prefs(c).getString("ongoing_text", "应用管控服务已连接 · 点此检查权限与后台设置")!!
     fun saveOngoing(c: Context, title: String, text: String) {
         prefs(c).edit().putString("ongoing_title", title.trim().take(80).ifBlank { "PurposeGate 正在运行" }).putString("ongoing_text", text.trim().take(200)).apply()
     }
@@ -106,16 +106,27 @@ object PurposeGateStore {
         val raw = p.getString(key, null) ?: return fallback
         return runCatching {
             val o = org.json.JSONObject(raw)
+            // Split the legacy shared delay without losing deliberate non-default settings.
+            if (o.has("pause")) {
+                val legacyPause = o.optInt("pause", 5).coerceIn(0, 60)
+                if (!o.has("confirm_delay")) {
+                    o.put("confirm_delay", if (legacyPause == 5) fallback.confirmDelaySeconds else legacyPause)
+                }
+                if (!o.has("skip_delay")) o.put("skip_delay", fallback.skipDelaySeconds)
+                o.remove("pause")
+                p.edit().putString(key, o.toString()).apply()
+            }
             // Drop retired features while preserving the other global/app settings.
-            if (o.has("allow") || o.has("skip_grace")) {
+            if (o.has("allow") || o.has("skip_grace") || o.has("budget")) {
                 o.remove("allow")
                 o.remove("skip_grace")
+                o.remove("budget")
                 p.edit().putString(key, o.toString()).apply()
             }
             AppFocusRule(
-                pauseSeconds = o.optInt("pause", fallback.pauseSeconds).coerceIn(0, 60),
+                confirmDelaySeconds = o.optInt("confirm_delay", fallback.confirmDelaySeconds).coerceIn(0, 60),
+                skipDelaySeconds = o.optInt("skip_delay", fallback.skipDelaySeconds).coerceIn(0, 60),
                 cooldownSeconds = o.optInt("cooldown", fallback.cooldownSeconds).coerceIn(0, 3600),
-                dailyLimitMinutes = o.optInt("budget", fallback.dailyLimitMinutes).coerceIn(0, 1440),
                 allowSkip = o.optBoolean("skip", fallback.allowSkip),
                 sessionRetentionSeconds = o.optInt("session_retention", fallback.sessionRetentionSeconds).coerceIn(0, 3600)
             )
@@ -124,9 +135,9 @@ object PurposeGateStore {
 
     private fun focusRuleJson(rule: AppFocusRule): String =
         org.json.JSONObject()
-            .put("pause", rule.pauseSeconds.coerceIn(0, 60))
+            .put("confirm_delay", rule.confirmDelaySeconds.coerceIn(0, 60))
+            .put("skip_delay", rule.skipDelaySeconds.coerceIn(0, 60))
             .put("cooldown", rule.cooldownSeconds.coerceIn(0, 3600))
-            .put("budget", rule.dailyLimitMinutes.coerceIn(0, 1440))
             .put("skip", rule.allowSkip)
             .put("session_retention", rule.sessionRetentionSeconds.coerceIn(0, 3600))
             .toString()

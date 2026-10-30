@@ -30,7 +30,7 @@
             android:exported="true"
             android:label="PurposeGate"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled accessibility service monitors selected foreground app transitions for local focus intervention" />
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled accessibility service applies local app usage control rules to selected foreground apps" />
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>

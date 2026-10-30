@@ -6,13 +6,15 @@ internal data class ForegroundWindow(
     val layer: Int,
     val focused: Boolean = false,
     val active: Boolean = false,
-    val inPictureInPicture: Boolean = false
+    val inPictureInPicture: Boolean = false,
+    val windowId: Int = -1
 )
 
 internal fun foregroundWindowPackage(
     windows: List<ForegroundWindow>,
     ignoredPackages: Set<String>,
-    requireActive: Boolean = false
+    requireActive: Boolean = false,
+    eventPackages: Map<Int, String> = emptyMap()
 ): String? {
     val candidates = windows.filter {
         !it.inPictureInPicture && it.packageName !in ignoredPackages
@@ -21,5 +23,6 @@ internal fun foregroundWindowPackage(
         ?: candidates.firstOrNull { it.active }
         ?: if (requireActive) null else candidates.firstOrNull()
     // An unreadable foreground root is unknown, not evidence that a background app is on top.
-    return top?.packageName
+    val resolved = top?.packageName ?: top?.let { eventPackages[it.windowId] }
+    return resolved?.takeUnless { it in ignoredPackages }
 }

@@ -9,7 +9,7 @@ package com.purposegate
  * 停顿弹窗与悬浮条的界面。
  *
  * 这些界面跑在无障碍服务创建的悬浮层里：服务决定显示哪个状态，这里只负责渲染。
- * 初次停顿按应用规则等待；到时提醒的继续等待期限由服务按本次会话的超时次数提供。
+ * 确认与跳过按各自的规则同时倒计时；到时提醒的继续等待期限由服务按本次会话的超时次数提供。
  */
 
 import androidx.compose.foundation.layout.Arrangement
@@ -182,7 +182,7 @@ internal fun BarCard(scale: Float, content: @Composable RowScope.() -> Unit) {
 }
 
 @Composable
-internal fun TimerPromptContent(appName: String, onStart: (Int) -> Unit, onDismiss: () -> Unit, pauseSeconds: Int, allowSkip: Boolean, onLeave: () -> Unit) {
+internal fun TimerPromptContent(appName: String, onStart: (Int) -> Unit, onDismiss: () -> Unit, confirmDelaySeconds: Int, skipDelaySeconds: Int, allowSkip: Boolean, onLeave: () -> Unit) {
     var customMinutes by androidx.compose.runtime.remember { mutableStateOf("") }
     var selected by androidx.compose.runtime.remember { mutableStateOf(5) }
     // 快捷选项来自「预设管理」，顺序就是显示顺序。
@@ -190,11 +190,12 @@ internal fun TimerPromptContent(appName: String, onStart: (Int) -> Unit, onDismi
     androidx.compose.runtime.LaunchedEffect(timerPresets) {
         if (timerPresets.isNotEmpty() && selected !in timerPresets) selected = timerPresets.first()
     }
-    val skipCountdown = rememberGateCountdown(pauseSeconds)
+    val confirmCountdown = rememberGateCountdown(confirmDelaySeconds)
+    val skipCountdown = rememberGateCountdown(skipDelaySeconds)
     OverlaySurface {
         PromptCard {
             PromptTitle(Symbols.Timer, "这次，想用多久？")
-            PauseBreath(skipCountdown)
+            PauseBreath(confirmCountdown)
             ExpressiveTonalButton(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("先不打开，回到桌面") }
             SupportingText("你正在打开 $appName。设置一段专注时间后继续使用。")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -217,8 +218,8 @@ internal fun TimerPromptContent(appName: String, onStart: (Int) -> Unit, onDismi
                 modifier = Modifier.fillMaxWidth()
             )
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ExpressiveButton(onClick = { onStart(customMinutes.toIntOrNull()?.coerceAtLeast(1) ?: selected) }, enabled = skipCountdown == 0 && (customMinutes.toIntOrNull()?.let { it > 0 } ?: (timerPresets.isNotEmpty())), modifier = Modifier.fillMaxWidth()) {
-                    Text(gateLabel("确认并开始", skipCountdown))
+                ExpressiveButton(onClick = { onStart(customMinutes.toIntOrNull()?.coerceAtLeast(1) ?: selected) }, enabled = confirmCountdown == 0 && (customMinutes.toIntOrNull()?.let { it > 0 } ?: (timerPresets.isNotEmpty())), modifier = Modifier.fillMaxWidth()) {
+                    Text(gateLabel("确认并开始", confirmCountdown))
                 }
                 ExpressiveTonalButton(onClick = onDismiss, enabled = allowSkip && skipCountdown == 0, modifier = Modifier.fillMaxWidth()) {
                     Text(gateLabel("跳过", skipCountdown))
@@ -281,29 +282,31 @@ internal fun PurposePromptContent(
     appName: String,
     onPurpose: (String) -> Unit,
     onDismiss: () -> Unit,
-    pauseSeconds: Int,
+    confirmDelaySeconds: Int,
+    skipDelaySeconds: Int,
     allowSkip: Boolean,
     onLeave: () -> Unit
 ) {
-    val skipCountdown = rememberGateCountdown(pauseSeconds)
+    val confirmCountdown = rememberGateCountdown(confirmDelaySeconds)
+    val skipCountdown = rememberGateCountdown(skipDelaySeconds)
     var custom by androidx.compose.runtime.remember { mutableStateOf("") }
     var selectedPurpose by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
     val purposePresets = PurposeGateStore.purposePresets(LocalContext.current)
     OverlaySurface {
         PromptCard {
             PromptTitle(Symbols.Flag, "这次，为了什么？")
-            PauseBreath(skipCountdown)
+            PauseBreath(confirmCountdown)
             ExpressiveTonalButton(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("先不打开，回到桌面") }
             SupportingText("你正在打开 $appName。选择这次使用的目的。")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 purposePresets.forEach { purpose ->
                     PromptChoice(
                         checked = selectedPurpose == purpose && custom.isBlank(),
-                        enabled = skipCountdown == 0,
+                        enabled = confirmCountdown == 0,
                         onClick = {
                             selectedPurpose = purpose
                             custom = ""
-                            if (skipCountdown == 0) onPurpose(purpose)
+                            if (confirmCountdown == 0) onPurpose(purpose)
                         },
                         label = { Text(purpose) }
                     )
@@ -325,9 +328,9 @@ internal fun PurposePromptContent(
                         onPurpose(custom.trim())
                     }
                 },
-                enabled = custom.isNotBlank() && skipCountdown == 0,
+                enabled = custom.isNotBlank() && confirmCountdown == 0,
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("使用自定义目的") }
+            ) { Text(gateLabel("使用自定义目的", confirmCountdown)) }
             ExpressiveTonalButton(
                 onClick = onDismiss,
                 enabled = allowSkip && skipCountdown == 0,
@@ -344,7 +347,8 @@ internal fun CombinedPromptContent(
     appName: String,
     onConfirm: (minutes: Int?, purpose: String?) -> Unit,
     onDismiss: () -> Unit,
-    pauseSeconds: Int,
+    confirmDelaySeconds: Int,
+    skipDelaySeconds: Int,
     allowSkip: Boolean,
     onLeave: () -> Unit
 ) {
@@ -358,11 +362,12 @@ internal fun CombinedPromptContent(
     val hasTimer = timerSelected || customMinutes.isNotBlank()
     val timerPresets = PurposeGateStore.timerPresets(LocalContext.current)
     val purposePresets = PurposeGateStore.purposePresets(LocalContext.current)
-    val skipCountdown = rememberGateCountdown(pauseSeconds)
+    val confirmCountdown = rememberGateCountdown(confirmDelaySeconds)
+    val skipCountdown = rememberGateCountdown(skipDelaySeconds)
     OverlaySurface {
         PromptCard {
             PromptTitle(Symbols.PauseCircle, "先停顿，再选择。")
-            PauseBreath(skipCountdown)
+            PauseBreath(confirmCountdown)
             ExpressiveTonalButton(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("先不打开，回到桌面") }
             SupportingText("你正在打开 $appName。选择本次使用的定时或目的。")
 
@@ -440,9 +445,9 @@ internal fun CombinedPromptContent(
                 onClick = {
                     onConfirm(if (hasTimer) resolvedMinutes else null, resolvedPurpose)
                 },
-                enabled = skipCountdown == 0 && (hasTimer || resolvedPurpose != null) && (!hasTimer || (customMinutes.isBlank() || (customMinutes.toIntOrNull() ?: 0) > 0)),
+                enabled = confirmCountdown == 0 && (hasTimer || resolvedPurpose != null) && (!hasTimer || (customMinutes.isBlank() || (customMinutes.toIntOrNull() ?: 0) > 0)),
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("确认") }
+            ) { Text(gateLabel("确认", confirmCountdown)) }
             ExpressiveTonalButton(
                 onClick = onDismiss,
                 enabled = allowSkip && skipCountdown == 0,
@@ -513,6 +518,19 @@ internal fun PurposeBarContent(purpose: String, scale: Float) {
                     fontSize = MaterialTheme.typography.bodyLarge.fontSize * scale
                 )
             )
+        }
+    }
+}
+
+/** 跳过本次目的与计时后，仍提示管控服务正在运行。 */
+@Composable
+internal fun RunningBarContent(scale: Float) {
+    OverlaySurface(fullScreen = false) {
+        BarCard(scale) {
+            Symbol(Symbols.Tune, size = (20 * scale).sp, tint = MaterialTheme.colorScheme.primary)
+            Text("PurposeGate 运行中", style = MaterialTheme.typography.bodyLarge.copy(
+                fontSize = MaterialTheme.typography.bodyLarge.fontSize * scale
+            ))
         }
     }
 }

@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">PurposeGate</string>
-    <string name="accessibility_service_description">监听前台应用并显示 PurposeGate 规则界面</string>
+    <string name="accessibility_service_description">识别前台应用，按设定规则管控所选应用的使用</string>
 </resources>

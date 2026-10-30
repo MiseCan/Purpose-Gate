@@ -69,9 +69,7 @@ internal fun DashboardPage(navigate: (Page) -> Unit) {
     val usage = remember(revision, selected) {
         selected.associateWith { PurposeGateStore.focusUsageMs(context, it) }
     }
-    val budgets = remember(revision, selected) {
-        selected.associateWith { PurposeGateStore.focusRule(context, it).dailyLimitMinutes }
-    }
+
     val rows = remember(apps, selected, usage) {
         apps.orEmpty().filter { it.packageName in selected }.sortedByDescending { usage[it.packageName] ?: 0L }
     }
@@ -106,17 +104,17 @@ internal fun DashboardPage(navigate: (Page) -> Unit) {
             }
             when {
                 selected.isEmpty() -> item {
-                    InfoSurface(Symbols.Apps, "还没有守护应用，可在“专注 → 守护应用”中添加。")
+                    InfoSurface(Symbols.Apps, "还没有管控应用，可在“专注 → 管控应用”中添加。")
                 }
                 apps == null -> item {
                     Box(Modifier.fillMaxWidth().padding(28.dp), contentAlignment = Alignment.Center) { LoadingIndicator() }
                 }
                 rows.isEmpty() -> item {
-                    InfoSurface(Symbols.Apps, "当前没有可展示的应用，请在专注页检查守护应用。")
+                    InfoSurface(Symbols.Apps, "当前没有可展示的应用，请在专注页检查管控应用。")
                 }
                 else -> itemsIndexed(rows, key = { _, app -> app.packageName }) { index, app ->
                     DashboardAppUsage(app, usage[app.packageName] ?: 0L,
-                        budgets[app.packageName] ?: 0, index, rows.size) { editing = app }
+                        index, rows.size) { editing = app }
                 }
             }
             item {
@@ -133,7 +131,7 @@ internal fun DashboardPage(navigate: (Page) -> Unit) {
 
 @Composable
 private fun DashboardSummary(usedMs: Long, serviceEnabled: Boolean) {
-    StatusSummaryCard("今日守护应用使用", dashboardDuration(usedMs), serviceEnabled)
+    StatusSummaryCard("今日管控应用使用", dashboardDuration(usedMs), serviceEnabled)
 }
 
 @Composable
@@ -152,7 +150,7 @@ private fun StatusSummaryCard(label: String, value: String, serviceEnabled: Bool
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         Symbol(if (serviceEnabled) Symbols.Shield else Symbols.Error, size = 16.sp)
-                        Text(if (serviceEnabled) "守护中" else "服务未开启", style = MaterialTheme.typography.labelSmall)
+                        Text(if (serviceEnabled) "管控中" else "服务未开启", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
@@ -182,31 +180,17 @@ private fun DashboardMetric(icon: Int, value: String, label: String, modifier: M
 }
 
 @Composable
-private fun DashboardAppUsage(app: InstalledApp, usedMs: Long, budget: Int,
+private fun DashboardAppUsage(app: InstalledApp, usedMs: Long,
     index: Int, count: Int, onClick: () -> Unit) {
-    val reached = budget > 0 && usedMs >= budget * 60_000L
-    val accent = if (reached) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Surface(onClick = onClick, shape = ExpressiveGroupShape(index, count),
         color = MaterialTheme.colorScheme.surfaceContainerLow) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Image(app.icon, null, Modifier.size(40.dp))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(app.label, style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                    Text(if (budget > 0) "每日额度 $budget 分钟" else "未设置每日额度",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(dashboardDuration(usedMs), style = MaterialTheme.typography.labelLarge, color = accent)
-            }
-            if (budget > 0) {
-                LinearProgressIndicator(
-                    progress = { (usedMs.toFloat() / (budget * 60_000L)).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth(), color = accent)
-                if (reached) Text("已达今日额度", style = MaterialTheme.typography.labelSmall, color = accent)
-            }
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Image(app.icon, null, Modifier.size(40.dp))
+            Text(app.label, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
+                maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            Text(dashboardDuration(usedMs), style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary)
         }
     }
 }
@@ -248,7 +232,7 @@ internal fun ExpressivePausePage(navigate: (Page) -> Unit) {
             item { FocusModeSummary(modes, serviceEnabled) }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    FocusQuickTile(Symbols.Apps, "守护应用", "选择需要提醒的应用",
+                    FocusQuickTile(Symbols.Apps, "管控应用", "选择需要管控的应用",
                         onClick = { navigate(Page.APPS) }, modifier = Modifier.weight(1f), badgeCount = selectedCount)
                     FocusQuickTile(Symbols.Tune, "专注规则", "全局与单独设置",
                         onClick = { navigate(Page.RULES) }, modifier = Modifier.weight(1f))
@@ -285,9 +269,9 @@ private fun FocusModeSummary(modes: Set<String>, serviceEnabled: Boolean) {
         hasTimer && hasPurpose -> "打开应用前，设定时长并确认目的。"
         hasTimer -> "为这次使用设定时长，到点再决定是否继续。"
         hasPurpose -> "打开应用前，先确认这次要做什么。"
-        else -> "时长和目的提醒已关闭，冷却与每日额度仍生效。"
+        else -> "时长和目的提醒已关闭，冷却仍生效。"
     }
-    StatusSummaryCard("当前提醒方式", title, serviceEnabled, description)
+    StatusSummaryCard("当前管控方式", title, serviceEnabled, description)
 }
 
 @Composable
@@ -344,7 +328,7 @@ internal fun RulesPage(onBack: () -> Unit) {
         ) {
             item {
                 Column(Modifier.padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                    InfoSurface(Symbols.Shield, "每日额度和冷却不能通过“跳过”绕过。没有单独设置的应用会使用全局规则。")
+                    InfoSurface(Symbols.Shield, "冷却不能通过“跳过”绕过，也不会主动结束会话。未单独设置的应用使用全局规则。")
                     EntryCard(Symbols.Tune, "全局规则", "设置所有未单独配置应用的默认规则", onClick = { editingGlobal = true })
                     SectionHeader("按应用设置边界", "可继续使用全局规则，也可为应用单独设置")
                 }
@@ -353,7 +337,7 @@ internal fun RulesPage(onBack: () -> Unit) {
                 Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) { LoadingIndicator() }
             }
             if (apps?.isEmpty() == true) item {
-                IllustratedState(Symbols.Apps, "先选择守护应用", "返回专注页，在“守护应用”中添加。")
+                IllustratedState(Symbols.Apps, "先选择管控应用", "返回专注页，在“管控应用”中添加。")
             }
             itemsIndexed(apps.orEmpty(), key = { _, app -> app.packageName }) { index, app ->
                 val rule = remember(revision, app.packageName) { PurposeGateStore.focusRule(context, app.packageName) }
@@ -378,10 +362,10 @@ internal fun RulesPage(onBack: () -> Unit) {
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 RuleSummary(if (hasOwnRule) "单独设置" else "使用全局")
-                                RuleSummary("停顿 ${rule.pauseSeconds} 秒")
+                                RuleSummary("确认 ${rule.confirmDelaySeconds} 秒")
+                                RuleSummary("跳过 ${rule.skipDelaySeconds} 秒")
                                 RuleSummary("退出保留 ${rule.sessionRetentionSeconds} 秒")
                                 RuleSummary("冷却 ${rule.cooldownSeconds} 秒")
-                                RuleSummary(if (rule.dailyLimitMinutes == 0) "每日不限" else "每日 ${rule.dailyLimitMinutes} 分钟")
                             }
                         }
                         Symbol(Symbols.ChevronRight, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -420,15 +404,15 @@ private fun RuleEditor(app: InstalledApp?, onDismiss: () -> Unit, onSaved: () ->
     var useGlobal by rememberSaveable(editorKey) {
         mutableStateOf(app != null && !PurposeGateStore.hasFocusRule(context, app.packageName))
     }
-    var pause by rememberSaveable(editorKey) { mutableStateOf(rule.pauseSeconds.toString()) }
+    var confirmDelay by rememberSaveable(editorKey) { mutableStateOf(rule.confirmDelaySeconds.toString()) }
+    var skipDelay by rememberSaveable(editorKey) { mutableStateOf(rule.skipDelaySeconds.toString()) }
     var retention by rememberSaveable(editorKey) { mutableStateOf(rule.sessionRetentionSeconds.toString()) }
     var cooldown by rememberSaveable(editorKey) { mutableStateOf(rule.cooldownSeconds.toString()) }
-    var budget by rememberSaveable(editorKey) { mutableStateOf(rule.dailyLimitMinutes.toString()) }
     var skip by rememberSaveable(editorKey) { mutableStateOf(rule.allowSkip) }
     val editable = app == null || !useGlobal
-    val valid = !editable || ((pause.toIntOrNull() ?: -1) in 0..60 &&
-        (retention.toIntOrNull() ?: -1) in 0..3600 && (cooldown.toIntOrNull() ?: -1) in 0..3600 &&
-        (budget.toIntOrNull() ?: -1) in 0..1440)
+    val valid = !editable || ((confirmDelay.toIntOrNull() ?: -1) in 0..60 &&
+        (skipDelay.toIntOrNull() ?: -1) in 0..60 &&
+        (retention.toIntOrNull() ?: -1) in 0..3600 && (cooldown.toIntOrNull() ?: -1) in 0..3600)
     val sheetState = rememberBottomSheetState(
         initialValue = SheetValue.Hidden,
         enabledValues = setOf(SheetValue.Hidden, SheetValue.PartiallyExpanded, SheetValue.Expanded)
@@ -485,8 +469,13 @@ private fun RuleEditor(app: InstalledApp?, onDismiss: () -> Unit, onSaved: () ->
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             item {
-                RuleNumber(Symbols.PauseCircle, "打开前停顿", "确认和跳过都需等待", "秒", 0..60,
-                    if (editable) pause else globalRule.pauseSeconds.toString(), { pause = it },
+                RuleNumber(Symbols.PauseCircle, "确认等待", "默认3秒；弹窗出现后开始，0=无需等待", "秒", 0..60,
+                    if (editable) confirmDelay else globalRule.confirmDelaySeconds.toString(), { confirmDelay = it },
+                    enabled = editable, onFocus = ::expandForInput)
+            }
+            item {
+                RuleNumber(Symbols.SkipNext, "跳过等待", "默认6秒；与确认同时开始，0=无需等待", "秒", 0..60,
+                    if (editable) skipDelay else globalRule.skipDelaySeconds.toString(), { skipDelay = it },
                     enabled = editable, onFocus = ::expandForInput)
             }
             item {
@@ -496,14 +485,10 @@ private fun RuleEditor(app: InstalledApp?, onDismiss: () -> Unit, onSaved: () ->
             }
             item {
                 RuleNumber(Symbols.Hourglass, "离开后的冷却", "实际使用后离开才开始，返回不会重置", "秒", 0..3600,
-                    if (editable) cooldown else globalRule.cooldownSeconds.toString(), { cooldown = it },
+                    if (editable) cooldown else globalRule.cooldownSeconds.toString(), { cooldown = it }, ImeAction.Done,
                     enabled = editable, onFocus = ::expandForInput)
             }
-            item {
-                RuleNumber(Symbols.Timer, "每日使用额度", "仅统计服务监听到的实际使用", "分钟", 0..1440,
-                    if (editable) budget else globalRule.dailyLimitMinutes.toString(), { budget = it }, ImeAction.Done,
-                    enabled = editable, onFocus = ::expandForInput)
-            }
+
             item {
                 SwitchRow(Symbols.SkipNext, "允许跳过", "关闭后必须确认目的或计时",
                     if (editable) skip else globalRule.allowSkip, enabled = editable) { skip = it }
@@ -519,8 +504,9 @@ private fun RuleEditor(app: InstalledApp?, onDismiss: () -> Unit, onSaved: () ->
                             PurposeGateStore.clearFocusRule(context, app.packageName)
                         } else {
                             val next = AppFocusRule(
-                                pauseSeconds = pause.toInt(), cooldownSeconds = cooldown.toInt(),
-                                dailyLimitMinutes = budget.toInt(), allowSkip = skip, sessionRetentionSeconds = retention.toInt()
+                                confirmDelaySeconds = confirmDelay.toInt(), skipDelaySeconds = skipDelay.toInt(),
+                                cooldownSeconds = cooldown.toInt(),
+                                allowSkip = skip, sessionRetentionSeconds = retention.toInt()
                             )
                             if (app == null) PurposeGateStore.setGlobalFocusRule(context, next)
                             else PurposeGateStore.setFocusRule(context, app.packageName, next)

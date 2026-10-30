@@ -12,14 +12,14 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class OverlayExitTest {
     @Suppress("UNCHECKED_CAST")
-    @Test fun unselectedWechatClearsThePreviousTargetsOverlayEvenWhenAlreadyRecordedAsCurrent() {
+    @Test fun unselectedApplicationClearsThePreviousTargetsOverlayEvenWhenAlreadyRecordedAsCurrent() {
         val controller = Robolectric.buildService(PurposeAccessibilityService::class.java).create()
         val service = controller.get()
         val type = service.javaClass
         fun field(name: String) = type.getDeclaredField(name).apply { isAccessible = true }
         try {
             PurposeGateStore.setSelectedPackages(service, setOf("target"))
-            field("currentPackage").set(service, "com.tencent.mm")
+            field("currentPackage").set(service, "com.example.unselected")
             val owner = field("overlayOwnerPackage" + '$' + "delegate").get(service) as MutableState<String?>
             val state = field("state" + '$' + "delegate").get(service) as MutableState<Any?>
             owner.value = "target"
@@ -27,7 +27,7 @@ class OverlayExitTest {
                 .getDeclaredConstructor(String::class.java).apply { isAccessible = true }.newInstance("查资料")
             state.value = bar
             type.getDeclaredMethod("handleForegroundPackage", String::class.java)
-                .apply { isAccessible = true }.invoke(service, "com.tencent.mm")
+                .apply { isAccessible = true }.invoke(service, "com.example.unselected")
             assertNull(owner.value)
             assertNull(state.value)
             assertTrue((field("sessions").get(service) as Map<*, *>).containsKey("target"))
