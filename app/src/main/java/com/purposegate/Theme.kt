@@ -2,7 +2,6 @@
 
 package com.purposegate
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -19,11 +18,7 @@ internal val CountdownFontFamily = FontFamily.Monospace
 fun PurposeGateTheme(denseTypography: Boolean = false, content: @Composable () -> Unit) {
     val context = LocalContext.current
     val dark = isSystemInDarkTheme()
-    val colors = when {
-        Build.VERSION.SDK_INT >= 31 -> if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark -> darkColorScheme()
-        else -> lightColorScheme()
-    }
+    val colors = if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     val type = Typography()
     MaterialExpressiveTheme(
         colorScheme = colors,

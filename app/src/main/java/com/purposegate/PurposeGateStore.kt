@@ -1,6 +1,11 @@
 package com.purposegate
 
 import android.content.Context
+import android.content.SharedPreferences
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
 
 object PurposeGateStore {
     fun ongoingTitle(c: Context) = prefs(c).getString("ongoing_title", "PurposeGate 正在运行")!!
@@ -26,6 +31,15 @@ object PurposeGateStore {
     val DEFAULT_PURPOSE_PRESETS = listOf("查资料", "娱乐")
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** Bridge service writes and UI writes into a lifecycle-cancelled observation stream. */
+    internal fun observeChanges(context: Context): Flow<Unit> = callbackFlow {
+        val preferences = prefs(context)
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> trySend(Unit) }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        trySend(Unit)
+        awaitClose { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }.conflate()
 
     fun selectedPackages(context: Context): Set<String> =
         prefs(context).getStringSet(KEY_SELECTED, emptySet())?.toSet().orEmpty()

@@ -8,7 +8,9 @@ app/src/main/java/com/purposegate/
   OverlayUi.kt                     悬浮层里的停顿弹窗 / 悬浮条界面（含各按钮门禁）
   ForegroundTracking.kt            前台应用窗口选择与离开复核
   MainActivity.kt                  应用入口
-  AppNavigation.kt                Navigation 3 + MD3E 页面动效、固定底栏与预测式返回
+  AppNavigation.kt                Miuix NavDisplay、横滑/预测返回、固定底栏
+  PageMotion.kt                   子页面 Miuix 公共时序参数（定向验证使用）
+  PurposeNavigator.kt              Miuix 返回栈、稳定页面身份与保存恢复
   AppNavigationState.kt           同级主页面与子页返回栈
   FadingContent.kt                淡出后移除旧控件树，当前页面直接接收操作
   AppData.kt                       页面枚举、应用清单、权限与偏好访问
@@ -16,6 +18,8 @@ app/src/main/java/com/purposegate/
   FocusPages.kt                    看板 / 专注 / 规则编辑
   UiPages.kt                       选择应用 / 设置 / 权限检查 / 预设管理 / 关于
   PurposeGateStore.kt              SharedPreferences 读写（唯一的数据落盘入口）
+  PurposeGateRepository.kt         页面数据访问与存储观察
+  PurposeGateViewModel.kt          StateFlow 页面状态与用户操作
   AboutContent.kt                  「关于」页文案（行为说明的唯一来源）
   Theme.kt / MaterialSymbols.kt / Illustrations.kt   M3 令牌、Material Symbols 图标、几何插图
 ```
@@ -44,10 +48,16 @@ app/src/main/java/com/purposegate/
 
 ## 构建与安装
 
+常规构建使用 `assembleDebug`，产出未裁剪的全量包。推送手机时使用 `assembleDevice`，启用 R8 裁剪代码和资源，并沿用 Debug 签名以覆盖已安装的调试版。
+
 ```powershell
 $env:JAVA_HOME='C:\Users\erqi0\.jdks\openjdk-27'
 .\gradlew.bat --no-daemon --offline :app:assembleDebug
-adb install -r app\build-upgraded\outputs\apk\debug\app-debug.apk
+```
+
+```powershell
+.\gradlew.bat --no-daemon --offline :app:assembleDevice
+adb install -r app\build-upgraded\outputs\apk\device\app-device.apk
 ```
 
 不要对已安装的应用使用 `am force-stop`：ColorOS 会因此把无障碍服务从系统设置里取消，

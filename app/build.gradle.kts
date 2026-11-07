@@ -9,26 +9,32 @@ android {
 
     defaultConfig {
         applicationId = "com.purposegate"
-        minSdk = 26
+        minSdk = 31
         targetSdk = 37
         // 版本变化会让桌面重新读取图标，换图标后不需要用户手动删掉再添加桌面快捷方式。
-        versionCode = 5
-        versionName = "2.0.1"
+        versionCode = 6
+        versionName = "2.1.0"
     }
 
     buildTypes {
+        create("device") {
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+            optimization {
+                enable = true
+            }
+        }
+
         release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            optimization {
+                enable = true
+            }
         }
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
     buildFeatures {
@@ -39,10 +45,12 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.activity:activity-compose:1.10.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
-    implementation("androidx.navigation3:navigation3-runtime:1.2.0")
-    implementation("androidx.navigation3:navigation3-ui:1.2.0")
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
+    implementation("top.yukonga.miuix.kmp:miuix-nav-android:0.9.4")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("androidx.compose.ui:ui:1.12.0")
     implementation("androidx.compose.ui:ui-tooling-preview:1.12.0")
     implementation("androidx.compose.foundation:foundation:1.12.0")
@@ -58,5 +66,5 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest:1.12.0")
 }
 
-kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
+kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21) } }
 layout.buildDirectory.set(file("build-upgraded"))

@@ -20,6 +20,8 @@
 
 ## 使用
 
+最低支持 Android 12（API 31）。
+
 1. 安装应用后选择管控应用。
 2. 在系统设置中开启 PurposeGate 无障碍服务。
 3. 在“专注 → 专注规则”中设置全局默认，按需为应用建立独立规则。
@@ -46,10 +48,11 @@ app/build-upgraded/outputs/apk/debug/app-debug.apk
 覆盖安装：
 
 ```powershell
-adb install -r app/build-upgraded/outputs/apk/debug/app-debug.apk
+.\gradlew.bat --no-daemon :app:assembleDevice
+adb install -r app/build-upgraded/outputs/apk/device/app-device.apk
 ```
 
-调试签名由每台开发机器的 Android 工具生成，仓库不包含本机签名文件。
+手机测试包启用 R8，使用本机调试签名。发布时在 Android Studio 选择 `release` 构建类型并使用发布密钥签名，发布包也启用 R8。
 
 ## 代码
 

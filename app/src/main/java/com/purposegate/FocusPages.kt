@@ -5,7 +5,7 @@
 package com.purposegate
 
 import android.content.Intent
-import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 
 import androidx.compose.animation.core.*
@@ -13,7 +13,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -32,14 +31,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.repeatOnLifecycle
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @Composable
 internal fun FocusNavigation(selected: Int, onDashboard: () -> Unit, onFocus: () -> Unit) {
@@ -55,27 +48,18 @@ internal fun FocusNavigation(selected: Int, onDashboard: () -> Unit, onFocus: ()
 @Composable
 internal fun DashboardPage(navigate: (Page) -> Unit) {
     val context = LocalContext.current
-    val owner = LocalLifecycleOwner.current
-    var apps by remember { mutableStateOf<List<InstalledApp>?>(null) }
-    var revision by remember { mutableIntStateOf(0) }
+    val model = LocalPurposeGateViewModel.current
+    val uiState by model.uiState.collectAsStateWithLifecycle()
+    val apps = uiState.apps
     var editing by remember { mutableStateOf<InstalledApp?>(null) }
-    LaunchedEffect(context, owner) {
-        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            launch { apps = withContext(Dispatchers.IO) { loadInstalledApps(context) } }
-            while (true) { revision++; delay(2000) }
-        }
-    }
-    val selected = remember(revision) { PurposeGateStore.selectedPackages(context) }
-    val usage = remember(revision, selected) {
-        selected.associateWith { PurposeGateStore.focusUsageMs(context, it) }
-    }
-
+    val selected = uiState.selected
+    val usage = uiState.usage
     val rows = remember(apps, selected, usage) {
         apps.orEmpty().filter { it.packageName in selected }.sortedByDescending { usage[it.packageName] ?: 0L }
     }
-    val pauses = remember(revision) { PurposeGateStore.focusCount(context, "pauses") }
-    val walkaways = remember(revision) { PurposeGateStore.focusCount(context, "walkaways") }
-    val serviceEnabled = remember(revision) { isAccessibilityServiceEnabled(context) }
+    val pauses = uiState.pauses
+    val walkaways = uiState.walkaways
+    val serviceEnabled = uiState.serviceEnabled
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
@@ -125,22 +109,23 @@ internal fun DashboardPage(navigate: (Page) -> Unit) {
         }
     }
     editing?.let { app ->
-        RuleEditor(app, onDismiss = { editing = null }, onSaved = { editing = null; revision++ })
+        RuleEditor(app, onDismiss = { editing = null }, onSaved = { editing = null })
     }
 }
 
 @Composable
 private fun DashboardSummary(usedMs: Long, serviceEnabled: Boolean) {
-    StatusSummaryCard("今日管控应用使用", dashboardDuration(usedMs), serviceEnabled)
-}
-
-@Composable
-private fun StatusSummaryCard(label: String, value: String, serviceEnabled: Boolean, supportingText: String? = null) {
-    Surface(shape = MaterialTheme.shapes.extraLarge, color = MaterialTheme.colorScheme.primaryContainer) {
+    val context = LocalContext.current
+    Surface(
+        onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+        enabled = !serviceEnabled,
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                Text("今日管控应用使用", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
                 Surface(shape = CircleShape,
                     color = if (serviceEnabled) MaterialTheme.colorScheme.surface.copy(alpha = .6f)
                         else MaterialTheme.colorScheme.errorContainer,
@@ -154,9 +139,9 @@ private fun StatusSummaryCard(label: String, value: String, serviceEnabled: Bool
                     }
                 }
             }
-            Text(value, style = MaterialTheme.typography.headlineLarge)
-            if (supportingText != null) {
-                Text(supportingText, style = MaterialTheme.typography.bodyMedium,
+            Text(dashboardDuration(usedMs), style = MaterialTheme.typography.headlineLarge)
+            if (!serviceEnabled) {
+                Text("点此开启无障碍服务", style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .8f))
             }
         }
@@ -208,28 +193,15 @@ private fun dashboardDuration(usedMs: Long): String {
 
 @Composable
 internal fun ExpressivePausePage(navigate: (Page) -> Unit) {
-    val context = LocalContext.current
-    val owner = LocalLifecycleOwner.current
-    var modes by remember { mutableStateOf(PurposeGateStore.modes(context)) }
-    var selectedCount by remember { mutableIntStateOf(PurposeGateStore.selectedPackages(context).size) }
-    var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
-    DisposableEffect(owner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                modes = PurposeGateStore.modes(context)
-                selectedCount = PurposeGateStore.selectedPackages(context).size
-                serviceEnabled = isAccessibilityServiceEnabled(context)
-            }
-        }
-        owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer) }
-    }
+    val model = LocalPurposeGateViewModel.current
+    val uiState by model.uiState.collectAsStateWithLifecycle()
+    val modes = uiState.modes
+    val selectedCount = uiState.selected.size
     Scaffold(containerColor = MaterialTheme.colorScheme.surface,
         topBar = { TopBar("专注") }
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = contentPadding,
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            item { FocusModeSummary(modes, serviceEnabled) }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     FocusQuickTile(Symbols.Apps, "管控应用", "选择需要管控的应用",
@@ -241,37 +213,16 @@ internal fun ExpressivePausePage(navigate: (Page) -> Unit) {
             item { SectionHeader("打开前提醒", "两项可同时开启，自动保存") }
             item {
                 SwitchRow(Symbols.Timer, "使用时长", "设置时长，到点提醒", PurposeGateStore.MODE_TIMER in modes) {
-                    modes = modes.setMembership(PurposeGateStore.MODE_TIMER, it)
-                    PurposeGateStore.setModes(context, modes)
+                    model.setMode(PurposeGateStore.MODE_TIMER, it)
                 }
             }
             item {
                 SwitchRow(Symbols.Flag, "使用目的", "确认目的，再继续使用", PurposeGateStore.MODE_PURPOSE in modes) {
-                    modes = modes.setMembership(PurposeGateStore.MODE_PURPOSE, it)
-                    PurposeGateStore.setModes(context, modes)
+                    model.setMode(PurposeGateStore.MODE_PURPOSE, it)
                 }
             }
         }
     }
-}
-
-@Composable
-private fun FocusModeSummary(modes: Set<String>, serviceEnabled: Boolean) {
-    val hasTimer = PurposeGateStore.MODE_TIMER in modes
-    val hasPurpose = PurposeGateStore.MODE_PURPOSE in modes
-    val title = when {
-        hasTimer && hasPurpose -> "时长 + 目的"
-        hasTimer -> "使用时长"
-        hasPurpose -> "使用目的"
-        else -> "仅执行规则"
-    }
-    val description = when {
-        hasTimer && hasPurpose -> "打开应用前，设定时长并确认目的。"
-        hasTimer -> "为这次使用设定时长，到点再决定是否继续。"
-        hasPurpose -> "打开应用前，先确认这次要做什么。"
-        else -> "时长和目的提醒已关闭，冷却仍生效。"
-    }
-    StatusSummaryCard("当前管控方式", title, serviceEnabled, description)
 }
 
 @Composable
@@ -302,21 +253,11 @@ private fun FocusQuickTile(icon: Int, title: String, subtitle: String, onClick: 
 @Composable
 internal fun RulesPage(onBack: () -> Unit) {
     val context = LocalContext.current
-    var apps by remember { mutableStateOf<List<InstalledApp>?>(null) }
+    val model = LocalPurposeGateViewModel.current
+    val uiState by model.uiState.collectAsStateWithLifecycle()
+    val apps = uiState.apps?.filter { it.packageName in uiState.selected }
     var editing by remember { mutableStateOf<InstalledApp?>(null) }
     var editingGlobal by remember { mutableStateOf(false) }
-    var revision by remember { mutableIntStateOf(0) }
-    val owner = LocalLifecycleOwner.current
-    DisposableEffect(owner) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) revision++ }
-        owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer) }
-    }
-    LaunchedEffect(revision) {
-        apps = withContext(Dispatchers.IO) {
-            loadInstalledApps(context).filter { it.packageName in PurposeGateStore.selectedPackages(context) }
-        }
-    }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surface,
         topBar = { TopBar("专注规则", onBack = onBack) }
@@ -340,8 +281,8 @@ internal fun RulesPage(onBack: () -> Unit) {
                 IllustratedState(Symbols.Apps, "先选择管控应用", "返回专注页，在“管控应用”中添加。")
             }
             itemsIndexed(apps.orEmpty(), key = { _, app -> app.packageName }) { index, app ->
-                val rule = remember(revision, app.packageName) { PurposeGateStore.focusRule(context, app.packageName) }
-                val hasOwnRule = remember(revision, app.packageName) { PurposeGateStore.hasFocusRule(context, app.packageName) }
+                val rule = uiState.ruleFor(app.packageName)
+                val hasOwnRule = app.packageName in uiState.ownRules
                 Surface(
                     onClick = { editing = app },
                     shape = ExpressiveGroupShape(index, apps.orEmpty().size),
@@ -375,10 +316,10 @@ internal fun RulesPage(onBack: () -> Unit) {
         }
     }
     editing?.let { app ->
-        RuleEditor(app, onDismiss = { editing = null }, onSaved = { editing = null; revision++ })
+        RuleEditor(app, onDismiss = { editing = null }, onSaved = { editing = null })
     }
     if (editingGlobal) {
-        RuleEditor(null, onDismiss = { editingGlobal = false }, onSaved = { editingGlobal = false; revision++ })
+        RuleEditor(null, onDismiss = { editingGlobal = false }, onSaved = { editingGlobal = false })
     }
 }
 
@@ -396,13 +337,15 @@ private fun RuleSummary(text: String) {
 @Composable
 private fun RuleEditor(app: InstalledApp?, onDismiss: () -> Unit, onSaved: () -> Unit) {
     val context = LocalContext.current
+    val model = LocalPurposeGateViewModel.current
+    val uiState by model.uiState.collectAsStateWithLifecycle()
     val editorKey = app?.packageName ?: "global"
-    val globalRule = remember(editorKey) { PurposeGateStore.globalFocusRule(context) }
+    val globalRule = uiState.globalRule
     val rule = remember(editorKey) {
-        if (app == null) globalRule else PurposeGateStore.focusRule(context, app.packageName)
+        if (app == null) globalRule else uiState.ruleFor(app.packageName)
     }
     var useGlobal by rememberSaveable(editorKey) {
-        mutableStateOf(app != null && !PurposeGateStore.hasFocusRule(context, app.packageName))
+        mutableStateOf(app != null && app.packageName !in uiState.ownRules)
     }
     var confirmDelay by rememberSaveable(editorKey) { mutableStateOf(rule.confirmDelaySeconds.toString()) }
     var skipDelay by rememberSaveable(editorKey) { mutableStateOf(rule.skipDelaySeconds.toString()) }
@@ -501,15 +444,14 @@ private fun RuleEditor(app: InstalledApp?, onDismiss: () -> Unit, onSaved: () ->
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     ExpressiveButton(enabled = valid, onClick = {
                         if (app != null && useGlobal) {
-                            PurposeGateStore.clearFocusRule(context, app.packageName)
+                            model.saveRule(app.packageName, null)
                         } else {
                             val next = AppFocusRule(
                                 confirmDelaySeconds = confirmDelay.toInt(), skipDelaySeconds = skipDelay.toInt(),
                                 cooldownSeconds = cooldown.toInt(),
                                 allowSkip = skip, sessionRetentionSeconds = retention.toInt()
                             )
-                            if (app == null) PurposeGateStore.setGlobalFocusRule(context, next)
-                            else PurposeGateStore.setFocusRule(context, app.packageName, next)
+                            model.saveRule(app?.packageName, next)
                         }
                         onSaved()
                     }, modifier = Modifier.fillMaxWidth()) {
@@ -537,12 +479,12 @@ private fun TransparentRuleEditorNavigationBar() {
     DisposableEffect(window) {
         if (window == null) return@DisposableEffect onDispose { }
         val originalColor = window.navigationBarColor
-        val originalContrast = if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced else false
+        val originalContrast = window.isNavigationBarContrastEnforced
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
-        if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
+        window.isNavigationBarContrastEnforced = false
         onDispose {
             window.navigationBarColor = originalColor
-            if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = originalContrast
+            window.isNavigationBarContrastEnforced = originalContrast
         }
     }
 }

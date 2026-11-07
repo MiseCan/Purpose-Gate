@@ -11,9 +11,6 @@ data class AppFocusRule(
 
 internal enum class FocusDecision { COOLDOWN, PROMPT }
 
-/** Application windows have already been filtered; our main Activity is a real foreground app. */
-internal fun verifiedForegroundPackage(eventPackage: String, topPackage: String?, ignoredTopPackages: Set<String>): String =
-    if (topPackage != null && topPackage !in ignoredTopPackages) topPackage else eventPackage
 internal fun focusDecision(
     rule: AppFocusRule,
     now: Long,

@@ -30,25 +30,22 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import kotlinx.coroutines.Dispatchers
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @Composable
-internal fun PageHost(target: Page, navigate: (Page) -> Unit, appsParent: Page = Page.PAUSE) {
+internal fun PageHost(target: Page, navigate: (Page) -> Unit,
+    onBack: () -> Unit = { target.parent()?.let(navigate) }) {
     when (target) {
         Page.HOME, Page.STATS -> DashboardPage(navigate)
         Page.PAUSE -> ExpressivePausePage(navigate)
-        Page.RULES -> RulesPage { navigate(Page.PAUSE) }
-        Page.APPS -> AppsPage { navigate(appsParent) }
-        Page.SETTINGS -> SettingsPage(navigate, onBack = { navigate(Page.HOME) })
-        Page.CHECKS -> ChecksPage { navigate(Page.SETTINGS) }
-        Page.APPEARANCE -> OverlaySettingsPage { navigate(Page.SETTINGS) }
-        Page.PRESETS -> PresetSettingsPage { navigate(Page.SETTINGS) }
-        Page.ABOUT -> AboutPage { navigate(Page.SETTINGS) }
+        Page.RULES -> RulesPage(onBack)
+        Page.APPS -> AppsPage(onBack)
+        Page.SETTINGS -> SettingsPage(navigate, onBack)
+        Page.CHECKS -> ChecksPage(onBack)
+        Page.APPEARANCE -> OverlaySettingsPage(onBack)
+        Page.PRESETS -> PresetSettingsPage(onBack)
+        Page.ABOUT -> AboutPage(onBack)
     }
 }
 
@@ -110,7 +107,7 @@ internal fun AboutPage(onBack: () -> Unit) {
                 }
             }
             ABOUT_SECTIONS.forEach { section ->
-                item {
+                item(key = section.title) {
                     ChildSection(section.icon, section.title) {
                         section.points.forEach { point ->
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -133,24 +130,11 @@ internal fun AboutPage(onBack: () -> Unit) {
 @Composable
 internal fun AppsPage(onBack: () -> Unit) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var apps by remember { mutableStateOf<List<InstalledApp>?>(null) }
-    var usageAccess by remember { mutableStateOf(hasUsageStatsAccess(context)) }
-    var reloadKey by remember { mutableIntStateOf(0) }
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                reloadKey++
-                usageAccess = hasUsageStatsAccess(context)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-    LaunchedEffect(context, reloadKey) {
-        apps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
-    }
-    var selected by remember { mutableStateOf(PurposeGateStore.selectedPackages(context)) }
+    val model = LocalPurposeGateViewModel.current
+    val uiState by model.uiState.collectAsStateWithLifecycle()
+    val apps = uiState.apps
+    val usageAccess = uiState.usageAccess
+    val selected = uiState.selected
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(AppFilter.ALL) }
     val allApps = apps.orEmpty()
@@ -196,6 +180,14 @@ internal fun AppsPage(onBack: () -> Unit) {
                 }
             }
             when {
+                uiState.appsError && apps.isNullOrEmpty() -> Column(
+                    Modifier.fillMaxWidth().weight(1f).padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    InfoSurface(Symbols.Error, "应用列表读取失败，请重试。")
+                    ExpressiveTonalButton(onClick = model::onResume) { Text("重新读取") }
+                }
                 apps == null -> Box(Modifier.fillMaxWidth().weight(1f),
                     contentAlignment = Alignment.Center) { LoadingIndicator() }
                 visible.isEmpty() -> Box(Modifier.fillMaxWidth().weight(1f).padding(32.dp),
@@ -215,8 +207,7 @@ internal fun AppsPage(onBack: () -> Unit) {
                         Surface(shape = ExpressiveGroupShape(index, visible.size), color = color) {
                             Row(Modifier.fillMaxWidth()
                                 .toggleable(checked, role = Role.Switch, onValueChange = { enabled ->
-                                    selected = selected.setMembership(app.packageName, enabled)
-                                    PurposeGateStore.setSelectedPackages(context, selected)
+                                    model.selectApp(app.packageName, enabled)
                                 }).heightIn(min = 88.dp).padding(horizontal = 16.dp, vertical = 16.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -244,28 +235,15 @@ internal fun AppsPage(onBack: () -> Unit) {
 @Composable
 internal fun ChecksPage(onBack: () -> Unit) {
     val context = LocalContext.current
-    var notificationTitle by rememberSaveable { mutableStateOf(PurposeGateStore.ongoingTitle(context)) }
-    var notificationText by rememberSaveable { mutableStateOf(PurposeGateStore.ongoingText(context)) }
-    var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
-    var usageAccess by remember { mutableStateOf(hasUsageStatsAccess(context)) }
-    var appCount by remember { mutableIntStateOf(0) }
+    val model = LocalPurposeGateViewModel.current
+    val uiState by model.uiState.collectAsStateWithLifecycle()
+    var notificationTitle by rememberSaveable { mutableStateOf(uiState.notificationTitle) }
+    var notificationText by rememberSaveable { mutableStateOf(uiState.notificationText) }
+    val serviceEnabled = uiState.serviceEnabled
+    val usageAccess = uiState.usageAccess
+    val appCount = uiState.apps?.size ?: 0
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val lifecycleOwner = LocalLifecycleOwner.current
-    fun refresh() {
-        serviceEnabled = isAccessibilityServiceEnabled(context)
-        usageAccess = hasUsageStatsAccess(context)
-        appCount = launcherApplications(context).map { it.packageName }
-            .distinct().count { it != context.packageName }
-    }
-    DisposableEffect(lifecycleOwner) {
-        refresh()
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) refresh()
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
 
     Scaffold(containerColor = MaterialTheme.colorScheme.surface,
         topBar = { TopBar("管控状态与权限", onBack = onBack) },
@@ -300,7 +278,7 @@ internal fun ChecksPage(onBack: () -> Unit) {
                 }
             }
             item {
-                ExpressiveOutlinedButton(onClick = { refresh() }, modifier = Modifier.fillMaxWidth()) {
+                ExpressiveOutlinedButton(onClick = model::onResume, modifier = Modifier.fillMaxWidth()) {
                     Symbol(Symbols.RestartAlt, size = 20.sp)
                     Spacer(Modifier.width(8.dp)); Text("重新检查")
                 }
@@ -318,9 +296,7 @@ internal fun ChecksPage(onBack: () -> Unit) {
                         minLines = 2, maxLines = 5, shape = MaterialTheme.shapes.large,
                         colors = childFieldColors(), modifier = Modifier.fillMaxWidth())
                     ExpressiveButton(onClick = {
-                        PurposeGateStore.saveOngoing(context, notificationTitle, notificationText)
-                        context.sendBroadcast(Intent(PurposeAccessibilityService.ACTION_REFRESH_NOTIFICATION)
-                            .setPackage(context.packageName))
+                        model.saveNotification(notificationTitle, notificationText)
                         scope.launch { snackbar.showSnackbar("已保存并更新通知") }
                     }, modifier = Modifier.fillMaxWidth()) { Text("保存并更新通知") }
                     ExpressiveTonalButton(onClick = { requestNotificationPermission(context) },
@@ -348,8 +324,10 @@ internal fun ChecksPage(onBack: () -> Unit) {
 @Composable
 internal fun OverlaySettingsPage(onBack: () -> Unit) {
     val context = LocalContext.current
-    var alpha by remember { mutableFloatStateOf(PurposeGateStore.overlayAlpha(context)) }
-    var scale by remember { mutableFloatStateOf(PurposeGateStore.overlayScale(context)) }
+    val model = LocalPurposeGateViewModel.current
+    val uiState by model.uiState.collectAsStateWithLifecycle()
+    val alpha = uiState.alpha
+    val scale = uiState.scale
 
     Scaffold(containerColor = MaterialTheme.colorScheme.surface,
         topBar = { TopBar("悬浮窗设置", onBack = onBack) }) { padding ->
@@ -386,13 +364,13 @@ internal fun OverlaySettingsPage(onBack: () -> Unit) {
             item {
                 SliderCard(Symbols.Opacity, "透明度", "${(alpha * 100).toInt()}%",
                     "调整悬浮条的透明度。", alpha, .4f..1f, 5) {
-                    alpha = it; PurposeGateStore.setOverlayAlpha(context, it)
+                    model.saveAlpha(it)
                 }
             }
             item {
                 SliderCard(Symbols.FormatSize, "大小", "${(scale * 100).toInt()}%",
                     "调整悬浮条的文字和布局大小。", scale, .75f..1.5f, 2) {
-                    scale = it; PurposeGateStore.setOverlayScale(context, it)
+                    model.saveScale(it)
                 }
             }
             item { InfoSurface(Symbols.Visibility,
@@ -406,15 +384,17 @@ internal fun PresetSettingsPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    var timerPresets by remember { mutableStateOf(PurposeGateStore.timerPresets(context)) }
-    var purposePresets by remember { mutableStateOf(PurposeGateStore.purposePresets(context)) }
+    val model = LocalPurposeGateViewModel.current
+    val uiState by model.uiState.collectAsStateWithLifecycle()
+    val timerPresets = uiState.timerPresets
+    val purposePresets = uiState.purposePresets
     var minuteInput by rememberSaveable { mutableStateOf("") }
     var purposeInput by rememberSaveable { mutableStateOf("") }
     fun saveTimers(next: List<Int>) {
-        timerPresets = next; PurposeGateStore.setTimerPresets(context, next)
+        model.saveTimers(next)
     }
     fun savePurposes(next: List<String>) {
-        purposePresets = next; PurposeGateStore.setPurposePresets(context, next)
+        model.savePurposes(next)
     }
     Scaffold(containerColor = MaterialTheme.colorScheme.surface,
         topBar = { TopBar("预设管理", onBack = onBack) },

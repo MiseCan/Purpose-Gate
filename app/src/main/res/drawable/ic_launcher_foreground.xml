@@ -1,14 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Material 3 几何图标：一道“门”里放着停顿符号，用副路径挖空。 -->
+<!-- PurposeGate: open arch and pause pillar, inside the adaptive safe zone. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="M38,46 A16,16 0 0 1 70,46 L70,74 A4,4 0 0 1 66,78 L42,78 A4,4 0 0 1 38,74 Z
-                          M47,52.5 A2.5,2.5 0 0 1 49.5,50 L49.5,50 A2.5,2.5 0 0 1 52,52.5 L52,61.5 A2.5,2.5 0 0 1 49.5,64 L49.5,64 A2.5,2.5 0 0 1 47,61.5 Z
-                          M56,52.5 A2.5,2.5 0 0 1 58.5,50 L58.5,50 A2.5,2.5 0 0 1 61,52.5 L61,61.5 A2.5,2.5 0 0 1 58.5,64 L58.5,64 A2.5,2.5 0 0 1 56,61.5 Z" />
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="@color/ic_launcher_foreground" android:pathData="M33,70 L33,51 C33,38 41,30 54,30 C66,30 75,38 75,48 C75,50 73,51 71,51 L67,51 C65,51 63,50 63,48 C63,43 60,41 54,41 C48,41 45,45 45,51 L45,70 C45,74 43,77 39,77 C35,77 33,74 33,70 Z" />
+    <path android:fillColor="@color/ic_launcher_accent" android:pathData="M63,61 C63,57 65,55 69,55 C73,55 75,57 75,61 L75,70 C75,74 73,77 69,77 C65,77 63,74 63,70 Z" />
 </vector>

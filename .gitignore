@@ -4,6 +4,7 @@
 /build/
 /app/build/
 /app/build-upgraded/
+/app/release/
 
 # Local IDE and Android SDK configuration
 /.idea/
