@@ -46,9 +46,15 @@ app/src/main/java/com/purposegate/
 - `app/src/main/java/com/purposegate/MainActivity.kt`：设置页、关于页入口、页面列表；
 - `app/src/main/java/com/purposegate/PurposeGateStore.kt`：新增配置项与默认值。
 
+## 页面布局
+
+应用页面直接使用 AndroidX Compose Material 3 的 `Scaffold` 和官方标题栏组件，使用组件提供的尺寸、字体、滚动行为和系统栏边距。看板与专注使用 `MediumTopAppBar`，子页面使用 `TopAppBar`。不要自行实现标题栏。
+
 ## 构建与安装
 
 常规构建使用 `assembleDebug`，产出未裁剪的全量包。推送手机时使用 `assembleDevice`，启用 R8 裁剪代码和资源，并沿用 Debug 签名以覆盖已安装的调试版。
+
+功能改动构建通过后，默认构建 `assembleDevice` 并覆盖安装到已连接的手机。仅在用户明确要求不安装时跳过；手机未连接时保留裁剪包并告知安装状态。
 
 ```powershell
 $env:JAVA_HOME='C:\Users\erqi0\.jdks\openjdk-27'

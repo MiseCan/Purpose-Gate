@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,9 +20,12 @@ internal data class PurposeGateUiState(
     val selected: Set<String> = emptySet(),
     val modes: Set<String> = emptySet(),
     val usage: Map<String, Long> = emptyMap(),
+    val appVisitStats: Map<String, AppVisitStats> = emptyMap(),
     val pauses: Int = 0,
     val walkaways: Int = 0,
     val serviceEnabled: Boolean = false,
+    val rootKeepAliveEnabled: Boolean = false,
+    val rootKeepAliveBusy: Boolean = false,
     val usageAccess: Boolean = false,
     val globalRule: AppFocusRule = AppFocusRule(),
     val rules: Map<String, AppFocusRule> = emptyMap(),
@@ -30,8 +34,10 @@ internal data class PurposeGateUiState(
     val scale: Float = 1f,
     val timerPresets: List<Int> = emptyList(),
     val purposePresets: List<String> = emptyList(),
-    val notificationTitle: String = "",
-    val notificationText: String = ""
+    val bedtimeConfirmationDate: LocalDate? = null,
+    val bedtimeToday: LocalDate = LocalDate.now(),
+    val bedtimePending: Boolean = false,
+    val bedtimeDays: List<Int> = emptyList()
 ) {
     fun ruleFor(pkg: String) = rules[pkg] ?: globalRule
 }
@@ -61,8 +67,21 @@ internal class PurposeGateViewModel(
 
     fun refresh() { mutableUiState.update(repository::snapshot) }
 
+    fun setRootKeepAlive(enabled: Boolean, onResult: (Boolean) -> Unit) {
+        if (mutableUiState.value.rootKeepAliveBusy) return
+        mutableUiState.update { it.copy(rootKeepAliveBusy = true) }
+        viewModelScope.launch {
+            val success = withContext(Dispatchers.IO) { RootKeepAlive.configure(enabled) }
+            if (success) repository.saveRootKeepAlive(enabled)
+            mutableUiState.update { repository.snapshot(it).copy(rootKeepAliveBusy = false) }
+            onResult(success)
+        }
+    }
+
     fun onResume() {
         refresh()
+        viewModelScope.launch(Dispatchers.IO) { repository.refreshBedtime() }
+        if (repository.rootKeepAliveNeedsUpdate()) setRootKeepAlive(true) { }
         if (loadJob?.isActive == true) return
         loadJob = viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { repository.loadApps() } }
@@ -80,5 +99,10 @@ internal class PurposeGateViewModel(
     fun saveScale(value: Float) = change { repository.saveScale(value) }
     fun saveTimers(values: List<Int>) = change { repository.saveTimers(values) }
     fun savePurposes(values: List<String>) = change { repository.savePurposes(values) }
-    fun saveNotification(title: String, text: String) = change { repository.saveNotification(title, text) }
+
+    fun confirmBedtime(date: LocalDate): Boolean {
+        val confirmed = repository.confirmBedtime(date)
+        refresh()
+        return confirmed
+    }
 }

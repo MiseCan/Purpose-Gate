@@ -9,9 +9,10 @@ internal data class AppNavigationState(
         Page.HOME, Page.STATS -> AppNavigationState(Page.HOME)
         Page.PAUSE -> AppNavigationState(Page.PAUSE)
         Page.SETTINGS -> AppNavigationState(Page.HOME, listOf(Page.HOME, Page.SETTINGS))
-        Page.ABOUT, Page.PRESETS, Page.APPEARANCE, Page.CHECKS ->
+        Page.ABOUT, Page.PRESETS, Page.APPEARANCE, Page.CHECKS, Page.BEDTIME, Page.FEATURE_TESTS ->
             AppNavigationState(Page.HOME, listOf(Page.HOME, Page.SETTINGS, target))
         Page.RULES -> AppNavigationState(Page.PAUSE, listOf(Page.HOME, Page.RULES))
+        Page.RULE_EDITOR -> AppNavigationState(Page.PAUSE, listOf(Page.HOME, Page.RULES, Page.RULE_EDITOR))
         Page.APPS -> copy(backStack = listOf(Page.HOME, Page.APPS))
     }
 

@@ -27,7 +27,7 @@
 3. 在“专注 → 专注规则”中设置全局默认，按需为应用建立独立规则。
 4. 在看板右上角的设置页检查通知、使用情况访问及后台运行授权。
 
-无障碍服务用于识别前台应用并显示停顿界面。使用情况访问用于应用列表排序及通知中的系统使用记录；通知用于显示服务运行状态。详细行为和限制见应用内“了解 PurposeGate”，其内容由 [AboutContent.kt](app/src/main/java/com/purposegate/AboutContent.kt) 维护。
+无障碍服务用于识别前台应用并显示停顿界面。使用情况访问用于应用列表排序、常驻通知的今日用量和睡前自动确认。通知用于显示服务运行状态和发送睡前提醒。详细行为和限制见应用内“了解 PurposeGate”，其内容由 [AboutContent.kt](app/src/main/java/com/purposegate/AboutContent.kt) 维护。
 
 ## 构建
 

@@ -42,11 +42,13 @@ import androidx.compose.material3.MaterialTheme
 
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -181,15 +183,56 @@ internal fun BarCard(scale: Float, content: @Composable RowScope.() -> Unit) {
     }
 }
 
+private const val DEFAULT_PROMPT_MINUTES = 5
+
+private class PromptDurationSelection {
+    var preset by mutableStateOf<Int?>(DEFAULT_PROMPT_MINUTES)
+    var customMinutes by mutableStateOf("")
+    val minutes: Int?
+        get() = if (customMinutes.isBlank()) preset else customMinutes.toIntOrNull()?.takeIf { it > 0 }
+    val isValid: Boolean
+        get() = customMinutes.isBlank() || minutes != null
+}
+
+@Composable
+private fun PromptDurationOptions(selection: PromptDurationSelection, allowDeselection: Boolean = false) {
+    var expanded by remember { mutableStateOf(false) }
+    val otherPresets = PurposeGateStore.timerPresets(LocalContext.current).filterNot { it == DEFAULT_PROMPT_MINUTES }
+    val visiblePresets = if (expanded) listOf(DEFAULT_PROMPT_MINUTES) + otherPresets else listOf(DEFAULT_PROMPT_MINUTES)
+
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        visiblePresets.forEach { minutes ->
+            val checked = selection.preset == minutes && selection.customMinutes.isBlank()
+            PromptChoice(
+                checked = checked,
+                onClick = {
+                    selection.preset = if (checked && allowDeselection) null else minutes
+                    selection.customMinutes = ""
+                },
+                label = { Text("$minutes 分钟") }
+            )
+        }
+        if (!expanded) TextButton(onClick = { expanded = true }) { Text("显示更多选项") }
+    }
+    if (expanded) {
+        TextField(
+            value = selection.customMinutes,
+            onValueChange = { selection.customMinutes = it.filter(Char::isDigit).take(4) },
+            label = { Text("自定义分钟数") },
+            shape = MaterialTheme.shapes.large,
+            leadingIcon = { Symbol(Symbols.Timer) },
+            suffix = { Text("分钟") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true,
+            isError = !selection.isValid,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
 @Composable
 internal fun TimerPromptContent(appName: String, onStart: (Int) -> Unit, onDismiss: () -> Unit, confirmDelaySeconds: Int, skipDelaySeconds: Int, allowSkip: Boolean, onLeave: () -> Unit) {
-    var customMinutes by androidx.compose.runtime.remember { mutableStateOf("") }
-    var selected by androidx.compose.runtime.remember { mutableStateOf(5) }
-    // 快捷选项来自「预设管理」，顺序就是显示顺序。
-    val timerPresets = PurposeGateStore.timerPresets(LocalContext.current)
-    androidx.compose.runtime.LaunchedEffect(timerPresets) {
-        if (timerPresets.isNotEmpty() && selected !in timerPresets) selected = timerPresets.first()
-    }
+    val duration = remember { PromptDurationSelection() }
     val confirmCountdown = rememberGateCountdown(confirmDelaySeconds)
     val skipCountdown = rememberGateCountdown(skipDelaySeconds)
     OverlaySurface {
@@ -198,27 +241,13 @@ internal fun TimerPromptContent(appName: String, onStart: (Int) -> Unit, onDismi
             PauseBreath(confirmCountdown)
             ExpressiveTonalButton(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("先不打开，回到桌面") }
             SupportingText("你正在打开 $appName。设置一段专注时间后继续使用。")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                timerPresets.forEach { minutes ->
-                    PromptChoice(checked = selected == minutes && customMinutes.isBlank(), onClick = {
-                        selected = minutes
-                        customMinutes = ""
-                    }, label = { Text("$minutes 分钟") })
-                }
-            }
-            TextField(
-                value = customMinutes,
-                onValueChange = { value -> customMinutes = value.filter(Char::isDigit).take(4) },
-                label = { Text("自定义分钟数") },
-                shape = MaterialTheme.shapes.large,
-                leadingIcon = { Symbol(Symbols.Timer) },
-                suffix = { Text("分钟") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            PromptDurationOptions(duration)
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ExpressiveButton(onClick = { onStart(customMinutes.toIntOrNull()?.coerceAtLeast(1) ?: selected) }, enabled = confirmCountdown == 0 && (customMinutes.toIntOrNull()?.let { it > 0 } ?: (timerPresets.isNotEmpty())), modifier = Modifier.fillMaxWidth()) {
+                ExpressiveButton(
+                    onClick = { duration.minutes?.let(onStart) },
+                    enabled = confirmCountdown == 0 && duration.minutes != null,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Text(gateLabel("确认并开始", confirmCountdown))
                 }
                 ExpressiveTonalButton(onClick = onDismiss, enabled = allowSkip && skipCountdown == 0, modifier = Modifier.fillMaxWidth()) {
@@ -271,7 +300,7 @@ internal fun TimerFinishedContent(
             SupportingText("这段 $minutes 分钟的专注时间已经结束，先停一下，再决定是否继续。")
             ExpressiveOutlinedButton(onClick = onLeave, modifier = Modifier.fillMaxWidth()) { Text("退出应用") }
             ExpressiveButton(onClick = onContinue, enabled = gateCountdown == 0, modifier = Modifier.fillMaxWidth()) {
-                Text(gateLabel("再次使用 3 分钟", gateCountdown))
+                Text(gateLabel("再次使用 $TIMEOUT_EXTENSION_MINUTES 分钟", gateCountdown))
             }
         }
     }
@@ -352,15 +381,11 @@ internal fun CombinedPromptContent(
     allowSkip: Boolean,
     onLeave: () -> Unit
 ) {
-    var customMinutes by androidx.compose.runtime.remember { mutableStateOf("") }
-    var selectedMinutes by androidx.compose.runtime.remember { mutableStateOf(5) }
-    var timerSelected by androidx.compose.runtime.remember { mutableStateOf(false) }
+    val duration = remember { PromptDurationSelection() }
     var customPurpose by androidx.compose.runtime.remember { mutableStateOf("") }
     var selectedPurpose by androidx.compose.runtime.remember { mutableStateOf<String?>(null) }
     val resolvedPurpose = selectedPurpose ?: customPurpose.trim().takeIf { it.isNotEmpty() }
-    val resolvedMinutes = customMinutes.toIntOrNull()?.coerceAtLeast(1) ?: selectedMinutes
-    val hasTimer = timerSelected || customMinutes.isNotBlank()
-    val timerPresets = PurposeGateStore.timerPresets(LocalContext.current)
+    val hasTimer = duration.minutes != null
     val purposePresets = PurposeGateStore.purposePresets(LocalContext.current)
     val confirmCountdown = rememberGateCountdown(confirmDelaySeconds)
     val skipCountdown = rememberGateCountdown(skipDelaySeconds)
@@ -376,33 +401,7 @@ internal fun CombinedPromptContent(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary
             )
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    timerPresets.forEach { minutes ->
-                        PromptChoice(
-                            checked = timerSelected && selectedMinutes == minutes && customMinutes.isBlank(),
-                            onClick = {
-                                selectedMinutes = minutes
-                                timerSelected = true
-                                customMinutes = ""
-                            },
-                            label = { Text("$minutes 分钟") }
-                        )
-                    }
-            }
-            TextField(
-                value = customMinutes,
-                onValueChange = { value ->
-                    customMinutes = value.filter(Char::isDigit).take(4)
-                    timerSelected = customMinutes.isNotBlank()
-                },
-                label = { Text("自定义分钟数") },
-                shape = MaterialTheme.shapes.large,
-                leadingIcon = { Symbol(Symbols.Timer) },
-                suffix = { Text("分钟") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            PromptDurationOptions(duration, allowDeselection = true)
 
             Text(
                 "选择目的",
@@ -443,9 +442,9 @@ internal fun CombinedPromptContent(
             )
             ExpressiveButton(
                 onClick = {
-                    onConfirm(if (hasTimer) resolvedMinutes else null, resolvedPurpose)
+                    onConfirm(duration.minutes, resolvedPurpose)
                 },
-                enabled = confirmCountdown == 0 && (hasTimer || resolvedPurpose != null) && (!hasTimer || (customMinutes.isBlank() || (customMinutes.toIntOrNull() ?: 0) > 0)),
+                enabled = confirmCountdown == 0 && duration.isValid && (hasTimer || resolvedPurpose != null),
                 modifier = Modifier.fillMaxWidth()
             ) { Text(gateLabel("确认", confirmCountdown)) }
             ExpressiveTonalButton(

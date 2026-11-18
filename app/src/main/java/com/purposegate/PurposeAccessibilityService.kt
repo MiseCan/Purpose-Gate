@@ -38,11 +38,18 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+internal const val TIMEOUT_EXTENSION_MINUTES = 3
 
 private sealed interface OverlayState {
     data class TimerPrompt(val appName: String) : OverlayState
@@ -148,18 +155,17 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         // 桌面/多任务事件是“已经切出应用”的强信号，用很短的去抖尽快收起弹窗。
         private const val SWITCHER_DEBOUNCE_MS = 200L
         private const val FOREGROUND_RECHECK_MS = 200L
+        private const val UNKNOWN_FOREGROUND_BAR_TIMEOUT_MS = 2_000L
         // 新窗口出现后的一小段时间内，它上面还没拿到焦点的窗口算“切换中”。
         private const val SWITCH_SETTLE_MS = 2_000L
         // 看到切走迹象后，暂停给被离开的应用重新弹窗，等新窗口就位。
         private const val SWITCH_SUPPRESS_MS = 1_200L
         // 一次进入最多等这么久；超时说明窗口列表一直没给出答案，交给下一轮复核。
         private const val PENDING_MAX_WAIT_MS = 4_000L
-        private const val USAGE_LABEL_CACHE_MS = 20_000L
         private const val NO_TIMER = -1L
         private const val OVERLAY_DEFAULT_X = 24
         private const val OVERLAY_DEFAULT_Y = 64
 
-        const val ACTION_REFRESH_NOTIFICATION = "com.purposegate.action.REFRESH_NOTIFICATION"
         const val ACTION_RULES_CHANGED = "com.purposegate.action.RULES_CHANGED"
 
         /** 桌面应用包名，用来区分“回到桌面/多任务”和“还在目标应用里”。 */
@@ -203,7 +209,21 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     private var overlayView: View? = null
     private var overlayLayoutParams: WindowManager.LayoutParams? = null
     private var overlayIsFullScreen = true
+    private var notificationUsageJob: Job? = null
+    private var notificationUsageRefreshRequested = false
+    private var notificationUsageMinute = Long.MIN_VALUE
+    private var notificationUsageDay: java.time.LocalDate? = null
+    private var notificationUsageByPackage: Map<String, Long>? = null
+    private var notificationAppLabel: String? = null
+    private var lastNotificationTitle: String? = null
     private var currentPackage: String? = null
+    // Independent of overlay state: a temporary loss of window visibility is not another open.
+    private var statsForegroundPackage: String? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            notificationAppLabel = null
+        }
     /** 已去抖、等待复核的进入候选；只影响弹窗时机，不参与会话归属。 */
     private var pendingPackage: String? = null
     private var pendingSince = 0L
@@ -221,6 +241,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     /** 正在显示的悬浮窗即当前会话的唯一归属。 */
     private val activeSessionOwnerPackage: String?
         get() = overlayOwnerPackage
+    private var barForegroundUnknownSince: Long? = null
     private val visitPolicy = VisitPolicy()
     private var visitPermitted = false
     private var lastUsageMark = SystemClock.elapsedRealtime()
@@ -231,8 +252,6 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     private val windowPackages = mutableMapOf<Int, String?>()
     /** 窗口 id → 首次出现在窗口列表里的时间，用来识别正在进行的切换。 */
     private val windowFirstSeen = mutableMapOf<Int, Long>()
-    private var usageLabelCache: Pair<String, String>? = null
-    private var usageLabelCacheAt = 0L
 
     /** [screenOn] 只给息屏结算用：广播到达时 isInteractive 可能已经是 false。 */
     private fun accountFocusUsage(screenOn: Boolean = isScreenOnNow()) {
@@ -254,6 +273,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
             reconcileForegroundWindow()
             accountFocusUsage()
             enforceCurrentFocusRule()
+            updateOngoingNotification()
             serviceHandler.postDelayed(this, 1000L)
         }
     }
@@ -316,6 +336,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         val owner = overlayOwnerPackage ?: return
         if (state !is OverlayState.TimerFinished) return
         if (!performGlobalAction(GLOBAL_ACTION_HOME)) return
+        statsForegroundPackage = null
         PurposeGateStore.recordFocusEvent(this, "walkaways")
         accountFocusUsage()
         endTargetVisit(owner)
@@ -376,7 +397,6 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     private val settingsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                ACTION_REFRESH_NOTIFICATION -> startOngoingNotification()
                 ACTION_RULES_CHANGED -> { rulesRevision++; reconcileForegroundWindow(); enforceCurrentFocusRule() }
             }
         }
@@ -422,9 +442,8 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     override fun onServiceConnected() {
         super.onServiceConnected()
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
-        startOngoingNotification()
-        serviceHandler.removeCallbacks(notificationRefresh)
-        serviceHandler.postDelayed(notificationRefresh, 60_000L)
+        lastNotificationTitle = null
+        updateOngoingNotification()
         enableWindowListAccess()
         refreshInputMethodCache()
         registerScreenStateReceiver()
@@ -438,62 +457,35 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         serviceHandler.postDelayed(focusPolicyTick, 1000L)
     }
 
-    private val notificationRefresh = object : Runnable {
-        override fun run() {
-            startOngoingNotification()
-            serviceHandler.postDelayed(this, 60_000L)
-        }
-    }
-
-    /** 常驻通知里的今日用量：系统前台事件查询较贵，按应用缓存一小段时间。 */
-    private fun currentUsageLabel(): String {
-        val pkg = currentPackage ?: return "等待前台应用变化"
-        val cached = usageLabelCache
-        if (cached != null && cached.first == pkg &&
-            SystemClock.elapsedRealtime() - usageLabelCacheAt < USAGE_LABEL_CACHE_MS
-        ) {
-            return cached.second
-        }
-        val label = runCatching { computeUsageLabel(pkg) }.getOrElse { fallbackAppName(pkg) }
-        usageLabelCache = pkg to label
-        usageLabelCacheAt = SystemClock.elapsedRealtime()
-        return label
-    }
-
-    private fun fallbackAppName(pkg: String): String = runCatching {
-        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
-    }.getOrDefault(pkg)
-
-    private fun computeUsageLabel(pkg: String): String {
-        val name = fallbackAppName(pkg)
-        if (!hasUsageStatsAccess(this)) return "$name · 未授予使用情况访问"
-        val now = System.currentTimeMillis()
-        val midnight = java.util.Calendar.getInstance().apply {
-            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
-            set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
-        }.timeInMillis
-        val events = (getSystemService(USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager).queryEvents(midnight - 86_400_000L, now)
-        val event = android.app.usage.UsageEvents.Event()
-        var activeSince: Long? = null
-        var total = 0L
-        while (events.hasNextEvent()) {
-            events.getNextEvent(event)
-            if (event.packageName != pkg) continue
-            when (event.eventType) {
-                android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> if (activeSince == null) activeSince = event.timeStamp
-                android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
-                android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED -> {
-                    activeSince?.let { total += (event.timeStamp - maxOf(it, midnight)).coerceAtLeast(0L) }
-                    activeSince = null
+    private fun updateOngoingNotification() {
+        val pkg = currentPackage?.takeUnless { it == packageName || isSwitcherPackage(it) }
+        val title = if (pkg == null || !isScreenOnNow() || isDeviceLocked()) {
+            "PurposeGate 正在运行"
+        } else {
+            val label = notificationAppLabel ?: appDisplayName(pkg).also { notificationAppLabel = it }
+            val now = System.currentTimeMillis()
+            val minute = now / 60_000L
+            val day = java.time.LocalDate.now()
+            val needsRefresh = notificationUsageRefreshRequested ||
+                minute != notificationUsageMinute || day != notificationUsageDay
+            if (needsRefresh && notificationUsageJob?.isActive != true) {
+                notificationUsageRefreshRequested = false
+                notificationUsageJob = lifecycleScope.launch {
+                    notificationUsageByPackage = withContext(Dispatchers.IO) {
+                        runCatching { todaySystemUsage(this@PurposeAccessibilityService, now) }.getOrNull()
+                    }
+                    notificationUsageMinute = minute
+                    notificationUsageDay = day
                 }
             }
+            val usage = notificationUsageByPackage
+            if (day != notificationUsageDay || usage == null) {
+                label
+            } else {
+                "$label 今日已使用 ${formatUsageDuration(usage.getOrDefault(pkg, 0L), showBothUnits = true)}"
+            }
         }
-        activeSince?.let { total += (now - maxOf(it, midnight)).coerceAtLeast(0L) }
-        val minutes = total / 60_000L
-        return "$name · 今日 ${minutes / 60}小时${minutes % 60}分钟（系统前台记录）"
-    }
-
-    private fun startOngoingNotification() {
+        if (title == lastNotificationTitle) return
         val channelId = "accessibility_running"
         val manager = getSystemService(android.app.NotificationManager::class.java)
         manager.createNotificationChannel(android.app.NotificationChannel(channelId, "后台停顿服务", android.app.NotificationManager.IMPORTANCE_LOW).apply {
@@ -501,12 +493,9 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
             setShowBadge(false)
         })
         val intent = android.app.PendingIntent.getActivity(this, 2720, Intent(this, MainActivity::class.java), android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
-        val usageLabel = currentUsageLabel()
         val notification = android.app.Notification.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_purposegate)
-            .setContentTitle(PurposeGateStore.ongoingTitle(this))
-            .setContentText(PurposeGateStore.ongoingText(this) + " · " + usageLabel)
-            .setStyle(android.app.Notification.BigTextStyle().bigText(PurposeGateStore.ongoingText(this) + "\n" + usageLabel))
+            .setContentTitle(title)
             .setContentIntent(intent).setOngoing(true).setOnlyAlertOnce(true)
             .setCategory(android.app.Notification.CATEGORY_SERVICE).build()
         runCatching {
@@ -515,13 +504,13 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
             } else {
                 startForeground(2720, notification)
             }
-        }.onFailure { Log.w(TAG, "Foreground notification unavailable", it) }
+        }.onSuccess { lastNotificationTitle = title }
+            .onFailure { Log.w(TAG, "Foreground notification unavailable", it) }
     }
 
     private fun registerSettingsReceiver() {
         if (settingsReceiverRegistered) return
         val filter = IntentFilter().apply {
-            addAction(ACTION_REFRESH_NOTIFICATION)
             addAction(ACTION_RULES_CHANGED)
         }
         runCatching {
@@ -577,9 +566,13 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         }, 1_000L)
     }
     override fun onUnbind(intent: Intent?): Boolean {
+        notificationUsageJob?.cancel()
+        notificationUsageRefreshRequested = false
+        notificationUsageMinute = Long.MIN_VALUE
+        notificationUsageDay = null
+        notificationUsageByPackage = null
         accountFocusUsage()
         serviceHandler.removeCallbacks(focusPolicyTick)
-        serviceHandler.removeCallbacks(notificationRefresh)
         stopForeground(STOP_FOREGROUND_REMOVE)
         unregisterScreenStateReceiver()
         unregisterSettingsReceiver()
@@ -627,6 +620,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     private fun onScreenOff() {
         // 息屏前的最后一段也算一次使用：先按亮屏结算，再按离开处理。
         cancelForegroundTracking()
+        statsForegroundPackage = null
         endCurrentForeground(screenOn = true)
     }
 
@@ -714,6 +708,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     private fun observeAndRetire(): ForegroundReading? {
         val reading = observeForeground() ?: return null
         val destination = reading.packageName
+        if (destination != null || reading.settling) barForegroundUnknownSince = null
         if (reading.settling || (destination != null && destination != currentPackage)) {
             endCurrentForeground()
         }
@@ -741,7 +736,11 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
             if (activeSessionOwnerPackage != null) onScreenOff()
             return
         }
-        val reading = observeAndRetire() ?: return
+        val reading = observeAndRetire()
+        if (reading == null || (reading.packageName == null && !reading.settling)) {
+            hideBarIfForegroundStaysUnknown()
+            return
+        }
         if (reading.settling) {
             // 切换还没完成：不给旧应用弹窗，等新窗口就位。
             requestWindowRecheck()
@@ -750,6 +749,21 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         val top = reading.packageName ?: return
         if (top == currentPackage && pendingPackage == null) return
         scheduleForegroundChange(top)
+    }
+
+    private fun hideBarIfForegroundStaysUnknown() {
+        val owner = overlayOwnerPackage ?: return
+        if (overlayView == null || overlayIsFullScreen) return
+        val now = SystemClock.elapsedRealtime()
+        val since = barForegroundUnknownSince ?: now.also { barForegroundUnknownSince = it }
+        if (now - since < UNKNOWN_FOREGROUND_BAR_TIMEOUT_MS) return
+
+        // Losing window visibility isn't proof of leaving. Save the session without starting cooldown.
+        accountFocusUsage()
+        endTargetVisit(owner)
+        visitPermitted = false
+        currentPackage = null
+        handledPackage = null
     }
 
     private fun clearPendingForeground() {
@@ -939,7 +953,12 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         packageName in LAUNCHER_PACKAGES || packageName == defaultHomePackage
 
     private fun handleForegroundPackage(packageName: String) {
-        if (packageName in PurposeGateStore.selectedPackages(this) && !canPresentFor(packageName)) return
+        val isManaged = packageName in PurposeGateStore.selectedPackages(this)
+        if (isManaged && !canPresentFor(packageName)) return
+        if (statsForegroundPackage != packageName) {
+            statsForegroundPackage = packageName
+            if (isManaged) PurposeGateStore.recordAppOpen(this, packageName)
+        }
         if (packageName == currentPackage) {
             activeSessionOwnerPackage?.takeIf { it != packageName }?.let { endTargetVisit(it) }
             return
@@ -949,7 +968,8 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
         endCurrentForeground()
         Log.d(TAG, "foreground -> $packageName")
         currentPackage = packageName
-        startOngoingNotification()
+        notificationUsageRefreshRequested = true
+        updateOngoingNotification()
 
         runCatching {
             val selected = PurposeGateStore.selectedPackages(this)
@@ -991,9 +1011,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
             if (handledPackage == packageName) return
             handledPackage = packageName
 
-            val appName = runCatching {
-                packageManager.getApplicationLabel(packageManager.getApplicationInfo(packageName, 0)).toString()
-            }.getOrDefault(packageName)
+            val appName = notificationAppLabel ?: appDisplayName(packageName)
             when {
                 PurposeGateStore.MODE_TIMER in modes && PurposeGateStore.MODE_PURPOSE in modes ->
                     showPrompt(packageName, OverlayState.CombinedPrompt(appName))
@@ -1165,7 +1183,6 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     override fun onDestroy() {
         accountFocusUsage()
         serviceHandler.removeCallbacks(focusPolicyTick)
-        serviceHandler.removeCallbacks(notificationRefresh)
         stopForeground(STOP_FOREGROUND_REMOVE)
         unregisterScreenStateReceiver()
         unregisterSettingsReceiver()
@@ -1319,6 +1336,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     }
 
     private fun clearOverlay() {
+        barForegroundUnknownSince = null
         serviceHandler.removeCallbacks(timerTick)
         overlayView?.removeCallbacks(dragUpdate)
         dragUpdatePosted = false
@@ -1336,9 +1354,9 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     }
 
     /** 由停顿弹窗进入正式使用：三处入口共用同一套授权、结算与建窗流程。 */
-    private fun beginVisit(minutes: Int, purpose: String?, hasTimer: Boolean) {
-        val owner = overlayOwnerPackage ?: return
-        if (!canPresentFor(owner)) return
+    private fun beginVisit(minutes: Int, purpose: String?, hasTimer: Boolean): Boolean {
+        val owner = overlayOwnerPackage ?: return false
+        if (!canPresentFor(owner)) return false
         permitVisit()
         clearOverlay()
         overlayOwnerPackage = owner
@@ -1352,9 +1370,10 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
             visitPermitted = false
             currentPackage = null
             handledPackage = null
-            return
+            return false
         }
         if (hasTimer) restartTimerTick()
+        return true
     }
 
     private fun startTimer(minutes: Int) = beginVisit(minutes, purpose = null, hasTimer = true)
@@ -1387,9 +1406,11 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
     /** 追加固定三分钟，沿用本次目的与超时次数，而非开始新的会话。 */
     private fun continueTimerAfterTimeout() {
         val finished = state as? OverlayState.TimerFinished ?: return
+        val owner = overlayOwnerPackage ?: return
         if (SystemClock.elapsedRealtime() < finished.continueAtElapsedRealtime) return
-        if (finished.purpose != null) startCombined(3, finished.purpose) else startTimer(3)
+        if (!beginVisit(TIMEOUT_EXTENSION_MINUTES, finished.purpose, hasTimer = true)) return
         timerTimeoutCount = finished.timeoutCount
+        PurposeGateStore.recordAppExtension(this, owner, TIMEOUT_EXTENSION_MINUTES)
     }
 
     private val timerTick = object : Runnable {
@@ -1404,7 +1425,7 @@ class PurposeAccessibilityService : AccessibilityService(), SavedStateRegistryOw
                 if (currentPackage == owner && pendingPackage == null) {
                     if (showTimerFinished(owner)) return
                 }
-                // Unknown foreground is not a departure: keep checking this expired timer.
+                // An expired timer can only be shown once its app is confirmed in front.
             }
             state = when (val current = state) {
                 is OverlayState.CombinedBar -> current.copy(remainingSeconds = timerSeconds)

@@ -16,11 +16,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -34,29 +37,49 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 
 @Composable
-internal fun PageHost(target: Page, navigate: (Page) -> Unit,
-    onBack: () -> Unit = { target.parent()?.let(navigate) }) {
+internal fun PageHost(
+    target: Page,
+    navigate: (Page) -> Unit,
+    onBack: () -> Unit = { target.parent()?.let(navigate) },
+    rulePackage: String? = null,
+    onEditRule: (String?) -> Unit = { navigate(Page.RULE_EDITOR) }
+) {
     when (target) {
         Page.HOME, Page.STATS -> DashboardPage(navigate)
         Page.PAUSE -> ExpressivePausePage(navigate)
-        Page.RULES -> RulesPage(onBack)
+        Page.RULES -> RulesPage(onBack, onEditRule)
+        Page.RULE_EDITOR -> RuleEditorPage(rulePackage, onBack)
         Page.APPS -> AppsPage(onBack)
         Page.SETTINGS -> SettingsPage(navigate, onBack)
         Page.CHECKS -> ChecksPage(onBack)
         Page.APPEARANCE -> OverlaySettingsPage(onBack)
         Page.PRESETS -> PresetSettingsPage(onBack)
         Page.ABOUT -> AboutPage(onBack)
+        Page.BEDTIME -> BedtimeReminderPage(onBack)
+        Page.FEATURE_TESTS -> FeatureTestsPage(onBack)
     }
 }
 
 @Composable
 internal fun SettingsPage(navigate: (Page) -> Unit, onBack: () -> Unit) {
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = MaterialTheme.colorScheme.surface,
-        topBar = { TopBar("设置", onBack = onBack) }
+        topBar = {
+            TopAppBar(
+                title = { Text("设置") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                scrollBehavior = scrollBehavior
+            )
+        }
     ) { padding ->
         LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
+            modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
             contentPadding = contentPadding,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -69,10 +92,18 @@ internal fun SettingsPage(navigate: (Page) -> Unit, onBack: () -> Unit) {
                 EntryCard(Symbols.Visibility, "悬浮条外观", "大小 · 透明度 · 拖动位置",
                     onClick = { navigate(Page.APPEARANCE) })
             }
+            item {
+                EntryCard(Symbols.Timer, "睡前提醒", "定时提醒把手机留在床外",
+                    onClick = { navigate(Page.BEDTIME) })
+            }
             item { SectionHeader("支持与说明", "管理授权，了解应用") }
             item {
                 EntryCard(Symbols.VerifiedUser, "管控状态与权限", "检查授权、后台运行与常驻通知",
                     onClick = { navigate(Page.CHECKS) })
+            }
+            item {
+                EntryCard(Symbols.Timer, "功能测试", "手动验证通知等功能",
+                    onClick = { navigate(Page.FEATURE_TESTS) })
             }
             item {
                 EntryCard(Symbols.Info, "了解 PurposeGate", "功能规则、隐私与设计参考",
@@ -83,10 +114,63 @@ internal fun SettingsPage(navigate: (Page) -> Unit, onBack: () -> Unit) {
 }
 
 @Composable
+private fun FeatureTestsPage(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = MaterialTheme.colorScheme.surface,
+        topBar = {
+            TopAppBar(
+                title = { Text("功能测试") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                scrollBehavior = scrollBehavior
+            )
+        },
+        snackbarHost = { SnackbarHost(snackbar) }
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).padding(contentPadding)) {
+            EntryCard(Symbols.Timer, "发送睡前测试通知", "立即发送，可检查通知权限和弹出效果", onClick = {
+                val sent = BedtimeReminder.sendTestNotification(context)
+                scope.launch {
+                    if (sent) {
+                        snackbar.showSnackbar("已发送睡前测试通知")
+                    } else {
+                        val result = snackbar.showSnackbar("睡前通知未开启", actionLabel = "通知设置")
+                        if (result == SnackbarResult.ActionPerformed) {
+                            context.openNotificationSettings()
+                        }
+                    }
+                }
+            })
+        }
+    }
+}
+
+@Composable
 internal fun AboutPage(onBack: () -> Unit) {
-    Scaffold(containerColor = MaterialTheme.colorScheme.surface,
-        topBar = { TopBar("关于", onBack = onBack) }) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = contentPadding,
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = MaterialTheme.colorScheme.surface,
+        topBar = {
+            TopAppBar(
+                title = { Text("关于") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                scrollBehavior = scrollBehavior
+            )
+        }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding), contentPadding = contentPadding,
             verticalArrangement = Arrangement.spacedBy(20.dp)) {
             item {
                 Surface(shape = MaterialTheme.shapes.extraLarge,
@@ -148,9 +232,22 @@ internal fun AppsPage(onBack: () -> Unit) {
             }
     }
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.surface,
-        topBar = { TopBar("选择应用", onBack = onBack) }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding),
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = MaterialTheme.colorScheme.surface,
+        topBar = {
+            TopAppBar(
+                title = { Text("选择应用") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                scrollBehavior = scrollBehavior
+            )
+        }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             TextField(value = query, onValueChange = { query = it },
                 placeholder = { Text("搜索应用名称或包名") },
@@ -237,18 +334,29 @@ internal fun ChecksPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val model = LocalPurposeGateViewModel.current
     val uiState by model.uiState.collectAsStateWithLifecycle()
-    var notificationTitle by rememberSaveable { mutableStateOf(uiState.notificationTitle) }
-    var notificationText by rememberSaveable { mutableStateOf(uiState.notificationText) }
     val serviceEnabled = uiState.serviceEnabled
     val usageAccess = uiState.usageAccess
     val appCount = uiState.apps?.size ?: 0
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.surface,
-        topBar = { TopBar("管控状态与权限", onBack = onBack) },
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = MaterialTheme.colorScheme.surface,
+        topBar = {
+            TopAppBar(
+                title = { Text("管控状态与权限") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                scrollBehavior = scrollBehavior
+            )
+        },
         snackbarHost = { SnackbarHost(snackbar) }) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).imePadding(),
+        LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
             contentPadding = contentPadding, verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item { SectionHeader("运行状态", "从系统设置返回后自动更新") }
             item { StatusCard("无障碍服务",
@@ -284,26 +392,30 @@ internal fun ChecksPage(onBack: () -> Unit) {
                 }
             }
             item {
-                ChildSection(Symbols.Notifications, "常驻通知", "服务运行时显示，可自定义文字") {
-                    TextField(notificationTitle, { notificationTitle = it.take(80) },
-                        label = { Text("通知标题") },
-                        supportingText = { Text("留空使用默认标题 · ${notificationTitle.length}/80") },
-                        singleLine = true, shape = MaterialTheme.shapes.large,
-                        colors = childFieldColors(), modifier = Modifier.fillMaxWidth())
-                    TextField(notificationText, { notificationText = it.take(200) },
-                        label = { Text("通知正文") },
-                        supportingText = { Text("${notificationText.length}/200") },
-                        minLines = 2, maxLines = 5, shape = MaterialTheme.shapes.large,
-                        colors = childFieldColors(), modifier = Modifier.fillMaxWidth())
-                    ExpressiveButton(onClick = {
-                        model.saveNotification(notificationTitle, notificationText)
-                        scope.launch { snackbar.showSnackbar("已保存并更新通知") }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("保存并更新通知") }
-                    ExpressiveTonalButton(onClick = { requestNotificationPermission(context) },
-                        modifier = Modifier.fillMaxWidth()) { Text("管理通知权限") }
-                }
+                EntryCard(Symbols.Notifications, "常驻通知", "显示当前应用今日累计用量，需要使用情况访问",
+                    onClick = { requestNotificationPermission(context) })
             }
             item { SectionHeader("后台运行", "系统授权和电池设置") }
+            item {
+                SwitchRow(
+                    Symbols.Shield,
+                    "Root 保活",
+                    if (uiState.rootKeepAliveBusy) "正在配置 Root 保活…"
+                    else "需要 Root 授权。自动恢复无障碍开关，重启后继续检查。",
+                    checked = uiState.rootKeepAliveEnabled,
+                    enabled = !uiState.rootKeepAliveBusy
+                ) { enabled ->
+                    model.setRootKeepAlive(enabled) { success ->
+                        scope.launch {
+                            snackbar.showSnackbar(when {
+                                !success -> "配置失败，请检查 Root 授权和开机脚本支持"
+                                enabled -> "Root 保活已开启"
+                                else -> "Root 保活已关闭"
+                            })
+                        }
+                    }
+                }
+            }
             item {
                 EntryCard(Symbols.Shield, "电池优化", "在系统中将 PurposeGate 设为不优化", onClick = {
                     runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
@@ -329,9 +441,22 @@ internal fun OverlaySettingsPage(onBack: () -> Unit) {
     val alpha = uiState.alpha
     val scale = uiState.scale
 
-    Scaffold(containerColor = MaterialTheme.colorScheme.surface,
-        topBar = { TopBar("悬浮窗设置", onBack = onBack) }) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = contentPadding,
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = MaterialTheme.colorScheme.surface,
+        topBar = {
+            TopAppBar(
+                title = { Text("悬浮窗设置") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                scrollBehavior = scrollBehavior
+            )
+        }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding), contentPadding = contentPadding,
             verticalArrangement = Arrangement.spacedBy(20.dp)) {
 
             item {
@@ -396,10 +521,23 @@ internal fun PresetSettingsPage(onBack: () -> Unit) {
     fun savePurposes(next: List<String>) {
         model.savePurposes(next)
     }
-    Scaffold(containerColor = MaterialTheme.colorScheme.surface,
-        topBar = { TopBar("预设管理", onBack = onBack) },
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+    Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        containerColor = MaterialTheme.colorScheme.surface,
+        topBar = {
+            TopAppBar(
+                title = { Text("预设管理") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                scrollBehavior = scrollBehavior
+            )
+        },
         snackbarHost = { SnackbarHost(snackbar) }) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).imePadding(),
+        LazyColumn(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding(),
             contentPadding = contentPadding, verticalArrangement = Arrangement.spacedBy(20.dp)) {
             item { SectionHeader("定时预设", "按这里的顺序显示在停顿弹窗中") }
             item {

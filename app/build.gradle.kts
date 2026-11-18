@@ -12,8 +12,8 @@ android {
         minSdk = 31
         targetSdk = 37
         // 版本变化会让桌面重新读取图标，换图标后不需要用户手动删掉再添加桌面快捷方式。
-        versionCode = 6
-        versionName = "2.1.0"
+        versionCode = 7
+        versionName = "2.2.0"
     }
 
     buildTypes {
@@ -54,7 +54,7 @@ dependencies {
     implementation("androidx.compose.ui:ui:1.12.0")
     implementation("androidx.compose.ui:ui-tooling-preview:1.12.0")
     implementation("androidx.compose.foundation:foundation:1.12.0")
-    // material3 内部会用到 core 图标集，这里显式固定版本；扩展图标集已不再需要（改用 Material Symbols 字体）。
+    implementation("androidx.compose.material:material-icons-core:1.7.8")
     implementation("androidx.compose.material:material-ripple:1.12.0")
     implementation("androidx.compose.material3:material3:1.5.0-beta01")
     implementation("androidx.appcompat:appcompat:1.6.1")

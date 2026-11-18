@@ -2,18 +2,15 @@ package com.purposegate
 
 import android.content.Context
 import android.content.SharedPreferences
+import java.time.LocalDate
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.conflate
 
-object PurposeGateStore {
-    fun ongoingTitle(c: Context) = prefs(c).getString("ongoing_title", "PurposeGate 正在运行")!!
-    fun ongoingText(c: Context) = prefs(c).getString("ongoing_text", "应用管控服务已连接 · 点此检查权限与后台设置")!!
-    fun saveOngoing(c: Context, title: String, text: String) {
-        prefs(c).edit().putString("ongoing_title", title.trim().take(80).ifBlank { "PurposeGate 正在运行" }).putString("ongoing_text", text.trim().take(200)).apply()
-    }
+internal data class AppVisitStats(val opens: Int = 0, val extendedMinutes: Int = 0)
 
+object PurposeGateStore {
     private const val PREFS = "purpose_gate"
     private const val KEY_SELECTED = "selected_packages"
     private const val KEY_MODES = "modes"
@@ -31,6 +28,73 @@ object PurposeGateStore {
     val DEFAULT_PURPOSE_PRESETS = listOf("查资料", "娱乐")
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    internal fun rootKeepAliveEnabled(context: Context) =
+        prefs(context).getBoolean("root_keep_alive", false)
+
+    internal fun setRootKeepAliveEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit()
+            .putBoolean("root_keep_alive", enabled)
+            .putInt("root_keep_alive_script_version", RootKeepAlive.SCRIPT_VERSION)
+            .apply()
+    }
+
+    internal fun rootKeepAliveNeedsUpdate(context: Context): Boolean =
+        rootKeepAliveEnabled(context) &&
+            prefs(context).getInt("root_keep_alive_script_version", 1) < RootKeepAlive.SCRIPT_VERSION
+
+    internal fun bedtimeEnabled(context: Context) = prefs(context).getBoolean("bedtime_enabled", false)
+
+    @Synchronized
+    internal fun setBedtimeEnabled(context: Context, enabled: Boolean) {
+        val editor = prefs(context).edit().putBoolean("bedtime_enabled", enabled)
+        if (enabled) editor.putLong("bedtime_enabled_since", System.currentTimeMillis())
+        else editor.remove("bedtime_enabled_since")
+        editor.apply()
+    }
+
+    @Synchronized
+    internal fun bedtimeEnabledSince(context: Context): Long? {
+        if (!bedtimeEnabled(context)) return null
+        val preferences = prefs(context)
+        if (preferences.contains("bedtime_enabled_since")) {
+            return preferences.getLong("bedtime_enabled_since", Long.MAX_VALUE)
+        }
+        // Existing installs start evaluating at migration, not before the feature existed.
+        val now = System.currentTimeMillis()
+        preferences.edit().putLong("bedtime_enabled_since", now).apply()
+        return now
+    }
+
+    internal fun bedtimeEvaluated(context: Context, date: LocalDate) =
+        prefs(context).getLong("bedtime_evaluated_day", Long.MIN_VALUE) == date.toEpochDay()
+
+    @Synchronized
+    internal fun finishBedtimeCheck(context: Context, enabledSince: Long, date: LocalDate, idle: Boolean) {
+        if (bedtimeEnabledSince(context) != enabledSince) return
+        val editor = prefs(context).edit().putLong("bedtime_evaluated_day", date.toEpochDay())
+        if (idle) editor.putStringSet("bedtime_confirmations", bedtimeConfirmations(context) + date.toString())
+        editor.apply()
+    }
+
+    internal fun bedtimeDelivered(context: Context, epochDay: Long) =
+        prefs(context).getLong("bedtime_delivered_day", Long.MIN_VALUE) == epochDay
+
+    internal fun markBedtimeDelivered(context: Context, epochDay: Long) {
+        prefs(context).edit().putLong("bedtime_delivered_day", epochDay).apply()
+    }
+
+    internal fun bedtimeConfirmations(context: Context): Set<String> =
+        prefs(context).getStringSet("bedtime_confirmations", emptySet()).orEmpty()
+
+    @Synchronized
+    internal fun confirmBedtime(context: Context, date: LocalDate): Boolean {
+        val confirmations = bedtimeConfirmations(context)
+        val day = date.toString()
+        if (day in confirmations) return false
+        prefs(context).edit().putStringSet("bedtime_confirmations", confirmations + day).apply()
+        return true
+    }
 
     /** Bridge service writes and UI writes into a lifecycle-cancelled observation stream. */
     internal fun observeChanges(context: Context): Flow<Unit> = callbackFlow {
@@ -184,12 +248,23 @@ object PurposeGateStore {
         return if (p.getString("focus_day", null) == focusDate()) p.getInt("focus_count_" + name, 0) else 0
     }
 
-    private fun focusEditor(context: Context): android.content.SharedPreferences.Editor {
+    internal fun appVisitStats(context: Context, pkg: String): AppVisitStats = AppVisitStats(
+        opens = focusCount(context, "app_opens_$pkg"),
+        extendedMinutes = focusCount(context, "app_extended_minutes_$pkg")
+    )
+
+    internal fun recordAppOpen(context: Context, pkg: String) =
+        recordFocusEvent(context, "app_opens_$pkg")
+
+    internal fun recordAppExtension(context: Context, pkg: String, minutes: Int) =
+        addFocusCount(context, "app_extended_minutes_$pkg", minutes)
+
+    private fun focusEditor(context: Context, day: String = focusDate()): SharedPreferences.Editor {
         val p = prefs(context)
         val edit = p.edit()
-        if (p.getString("focus_day", null) != focusDate()) {
+        if (p.getString("focus_day", null) != day) {
             p.all.keys.filter { it.startsWith("focus_used_") || it.startsWith("focus_count_") }.forEach { edit.remove(it) }
-            edit.putString("focus_day", focusDate())
+            edit.putString("focus_day", day)
         }
         return edit
     }
@@ -207,6 +282,14 @@ object PurposeGateStore {
     }
 
     fun recordFocusEvent(context: Context, name: String) {
-        focusEditor(context).putInt("focus_count_" + name, focusCount(context, name) + 1).apply()
+        addFocusCount(context, name, 1)
+    }
+
+    private fun addFocusCount(context: Context, name: String, amount: Int) {
+        val day = focusDate()
+        val key = "focus_count_$name"
+        val preferences = prefs(context)
+        val previous = if (preferences.getString("focus_day", null) == day) preferences.getInt(key, 0) else 0
+        focusEditor(context, day).putInt(key, previous + amount).apply()
     }
 }

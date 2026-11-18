@@ -33,7 +33,6 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MediumTopAppBar
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Slider
@@ -42,8 +41,6 @@ import androidx.compose.material3.SliderState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
@@ -54,7 +51,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -140,71 +136,6 @@ internal fun ExpressiveIconButton(
         shapes = IconButtonDefaults.shapes()
     ) {
         Symbol(codePoint, contentDescription = contentDescription)
-    }
-}
-
-@Composable
-internal fun TopBar(
-    title: String,
-    subtitle: String? = null,
-    onBack: (() -> Unit)? = null,
-    onSettings: (() -> Unit)? = null
-) {
-    if (onBack != null) {
-        // A child destination has one horizontal title line, matching the system settings app.
-        TopAppBar(
-            title = {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.titleLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            navigationIcon = {
-                ExpressiveIconButton(
-                    Symbols.ArrowBack,
-                    contentDescription = "返回",
-                    onClick = onBack,
-                    modifier = Modifier.padding(start = 8.dp, end = 12.dp)
-                )
-            },
-            expandedHeight = 80.dp,
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surface,
-                scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
-            )
-        )
-    } else {
-        MediumTopAppBar(
-            actions = {
-                if (onSettings != null) {
-                    IconButton(
-                        onClick = onSettings,
-                        shapes = IconButtonDefaults.shapes(),
-                        modifier = Modifier.padding(end = 8.dp).size(48.dp)
-                    ) {
-                        Symbol(Symbols.Settings, contentDescription = "设置")
-                    }
-                }
-            },
-            title = {
-                Column {
-                    Text(title, style = MaterialTheme.typography.headlineMedium)
-                    if (subtitle != null) {
-                        Text(
-                            subtitle,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surface,
-                scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
-            )
-        )
     }
 }
 

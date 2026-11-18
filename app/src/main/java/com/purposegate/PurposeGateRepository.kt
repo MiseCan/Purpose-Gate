@@ -1,6 +1,9 @@
 package com.purposegate
 
 import android.content.Context
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.ZonedDateTime
 
 /** UI data access; persistence and service notifications stay in PurposeGateStore. */
 internal class PurposeGateRepository(context: Context) {
@@ -9,13 +12,18 @@ internal class PurposeGateRepository(context: Context) {
 
     fun snapshot(previous: PurposeGateUiState): PurposeGateUiState {
         val selected = PurposeGateStore.selectedPackages(context)
+        val now = ZonedDateTime.now()
+        val month = YearMonth.from(now)
+        val confirmations = PurposeGateStore.bedtimeConfirmations(context)
         return previous.copy(
             selected = selected,
             modes = PurposeGateStore.modes(context),
             usage = selected.associateWith { PurposeGateStore.focusUsageMs(context, it) },
+            appVisitStats = selected.associateWith { PurposeGateStore.appVisitStats(context, it) },
             pauses = PurposeGateStore.focusCount(context, "pauses"),
             walkaways = PurposeGateStore.focusCount(context, "walkaways"),
             serviceEnabled = isAccessibilityServiceEnabled(context),
+            rootKeepAliveEnabled = PurposeGateStore.rootKeepAliveEnabled(context),
             usageAccess = hasUsageStatsAccess(context),
             globalRule = PurposeGateStore.globalFocusRule(context),
             rules = selected.associateWith { PurposeGateStore.focusRule(context, it) },
@@ -24,12 +32,30 @@ internal class PurposeGateRepository(context: Context) {
             scale = PurposeGateStore.overlayScale(context),
             timerPresets = PurposeGateStore.timerPresets(context),
             purposePresets = PurposeGateStore.purposePresets(context),
-            notificationTitle = PurposeGateStore.ongoingTitle(context),
-            notificationText = PurposeGateStore.ongoingText(context)
+            bedtimeConfirmationDate = openBedtimeDate(now)?.takeUnless { it.toString() in confirmations },
+            bedtimeToday = now.toLocalDate(),
+            bedtimePending = PurposeGateStore.bedtimeEnabled(context) && now.toLocalTime().isBefore(BEDTIME_CHECK_AT),
+            bedtimeDays = (1..month.lengthOfMonth()).filter { month.atDay(it).toString() in confirmations }
         )
     }
 
+    private fun openBedtimeDate(now: ZonedDateTime): LocalDate? =
+        if (PurposeGateStore.bedtimeEnabled(context)) {
+            bedtimeConfirmationDate(now)
+        } else null
+
+    fun confirmBedtime(date: LocalDate): Boolean =
+        openBedtimeDate(ZonedDateTime.now()) == date && PurposeGateStore.confirmBedtime(context, date)
+
+    fun refreshBedtime() {
+        if (!PurposeGateStore.bedtimeEnabled(context)) return
+        BedtimeReminder.reschedule(context)
+        BedtimeCheck.settle(context)
+    }
+
     fun loadApps() = loadInstalledApps(context)
+    fun saveRootKeepAlive(enabled: Boolean) = PurposeGateStore.setRootKeepAliveEnabled(context, enabled)
+    fun rootKeepAliveNeedsUpdate() = PurposeGateStore.rootKeepAliveNeedsUpdate(context)
     fun selectApp(pkg: String, selected: Boolean) = PurposeGateStore.setSelectedPackages(
         context, PurposeGateStore.selectedPackages(context).setMembership(pkg, selected))
     fun setMode(mode: String, enabled: Boolean) = PurposeGateStore.setModes(
@@ -45,9 +71,4 @@ internal class PurposeGateRepository(context: Context) {
     fun saveScale(value: Float) = PurposeGateStore.setOverlayScale(context, value)
     fun saveTimers(values: List<Int>) = PurposeGateStore.setTimerPresets(context, values)
     fun savePurposes(values: List<String>) = PurposeGateStore.setPurposePresets(context, values)
-    fun saveNotification(title: String, text: String) {
-        PurposeGateStore.saveOngoing(context, title, text)
-        context.sendBroadcast(android.content.Intent(PurposeAccessibilityService.ACTION_REFRESH_NOTIFICATION)
-            .setPackage(context.packageName))
-    }
 }

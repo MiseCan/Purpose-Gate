@@ -83,9 +83,17 @@ internal fun PurposeGateApp(
                         if (navigator.currentEntry?.id == route.id) latestNavigate(target)
                     }
                     if (route.page == Page.HOME) RootPages(selected, pageNavigate)
-                    else PageHost(route.page, pageNavigate, onBack = {
-                        if (navigator.currentEntry?.id == route.id) navigator.pop()
-                    })
+                    else PageHost(
+                        route.page,
+                        pageNavigate,
+                        onBack = { if (navigator.currentEntry?.id == route.id) navigator.pop() },
+                        rulePackage = route.rulePackage,
+                        onEditRule = { pkg ->
+                            if (navigator.currentEntry?.id == route.id) {
+                                model.selectRoot(navigator.open(Page.RULE_EDITOR, selected, pkg))
+                            }
+                        }
+                    )
                 }
             }
         }
